@@ -1,0 +1,800 @@
+{
+  "menus": [
+    {
+      "id": "m-1",
+      "name": "Nasi 1 Porsi",
+      "price": 5000,
+      "category": "Karbohidrat"
+    },
+    {
+      "id": "m-2",
+      "name": "Nasi 1/2 Porsi",
+      "price": 3000,
+      "category": "Karbohidrat"
+    },
+    {
+      "id": "m-14",
+      "name": "Mie goreng",
+      "price": 3000,
+      "category": "Karbohidrat"
+    },
+    {
+      "id": "m-30",
+      "name": "Sambal goreng kentang",
+      "price": 3000,
+      "category": "Karbohidrat"
+    },
+    {
+      "id": "m-36",
+      "name": "Kwetiau goreng",
+      "price": 3000,
+      "category": "Karbohidrat"
+    },
+    {
+      "id": "m-37",
+      "name": "Bihun goreng",
+      "price": 3000,
+      "category": "Karbohidrat"
+    },
+    {
+      "id": "m-3",
+      "name": "Oseng tahu",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-4",
+      "name": "Oseng kangkung",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-5",
+      "name": "Lodeh nangka",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-6",
+      "name": "Capcay",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-7",
+      "name": "Oseng tahu sawi ijo",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-8",
+      "name": "Oseng kacang",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-9",
+      "name": "Oseng labu siam",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-10",
+      "name": "Oseng tahu toge",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-11",
+      "name": "Oseng pare",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-12",
+      "name": "Bening bayam",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-13",
+      "name": "Sayur sop",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-28",
+      "name": "Terong balado",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-29",
+      "name": "Semur jengkol",
+      "price": 4000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-31",
+      "name": "Kentang mustopa",
+      "price": 3000,
+      "category": "Sayur"
+    },
+    {
+      "id": "m-15",
+      "name": "Orek tempe",
+      "price": 3000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-16",
+      "name": "Kikil",
+      "price": 3000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-17",
+      "name": "Usus",
+      "price": 3000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-18",
+      "name": "Telur balado",
+      "price": 4000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-19",
+      "name": "Telur ceplok",
+      "price": 4000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-20",
+      "name": "Telur dadar",
+      "price": 4000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-21",
+      "name": "Ayam balado",
+      "price": 8000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-22",
+      "name": "Ati balado",
+      "price": 5000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-23",
+      "name": "Cue tongkol",
+      "price": 4000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-24",
+      "name": "Lele goreng",
+      "price": 6000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-25",
+      "name": "Bawal goreng",
+      "price": 6000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-26",
+      "name": "Bandeng goreng",
+      "price": 6000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-27",
+      "name": "Cumi balado",
+      "price": 5000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-32",
+      "name": "Teri kering balado",
+      "price": 3000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-33",
+      "name": "Tahu bacem",
+      "price": 2000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-34",
+      "name": "Tempe bacem",
+      "price": 2000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-35",
+      "name": "Ayam kecap",
+      "price": 8000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-38",
+      "name": "Lele balado",
+      "price": 6000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-39",
+      "name": "Bawal balado",
+      "price": 6000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-40",
+      "name": "Tumis asin japu",
+      "price": 4000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-41",
+      "name": "Rica-rica ayam",
+      "price": 5000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-42",
+      "name": "Tahu goreng",
+      "price": 2000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-43",
+      "name": "Tempe goreng",
+      "price": 2000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-44",
+      "name": "Gorengan",
+      "price": 2000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-46",
+      "name": "Opor Ayam",
+      "price": 8000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-47",
+      "name": "Ayam Goreng",
+      "price": 8000,
+      "category": "Lauk"
+    },
+    {
+      "id": "m-45",
+      "name": "Sendok",
+      "price": 0,
+      "category": "Alat Makan"
+    }
+  ],
+  "schedules": {
+    "m-1": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-2": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-3": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-4": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-5": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-6": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-7": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-8": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-9": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-10": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-11": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-12": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-13": {
+      "Senin": true,
+      "Selasa": false,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-14": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-15": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-16": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-17": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-18": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-19": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-20": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-21": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-22": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-23": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-24": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-25": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-26": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-27": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-28": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-29": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-30": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-31": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-32": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-33": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-34": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-35": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-36": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-37": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-38": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-39": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-40": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-41": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-42": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-43": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-44": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-45": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-46": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    },
+    "m-47": {
+      "Senin": true,
+      "Selasa": true,
+      "Rabu": true,
+      "Kamis": true,
+      "Jumat": true,
+      "Sabtu": true,
+      "Minggu": true
+    }
+  },
+  "orders": [
+    {
+      "order_number": "ORD-1791703781646-2F33B876",
+      "user_name": "Jamal Muhammad",
+      "company": "PT Bright Mobile Telecommunication",
+      "division": "BPM",
+      "location": "Loker BPM",
+      "items": [
+        {
+          "name": "Nasi 1/2 Porsi",
+          "price": 3000,
+          "qty": 1,
+          "subtotal": 3000
+        },
+        {
+          "name": "Sayur sop",
+          "price": 3000,
+          "qty": 1,
+          "subtotal": 3000
+        },
+        {
+          "name": "Usus",
+          "price": 3000,
+          "qty": 1,
+          "subtotal": 3000
+        }
+      ],
+      "total_price": 9000,
+      "order_day": "Pesan Hari Ini (Minggu, 11 Okt)",
+      "order_date": "2026-10-11",
+      "created_at": "2026-10-11T07:29:41.647Z"
+    },
+    {
+      "order_number": "ORD-1791703232894-448B6B40",
+      "user_name": "Rudi",
+      "company": "PT Bright Mobile Telecommunication",
+      "division": "IT",
+      "location": "Lantai 3",
+      "items": [
+        {
+          "name": "Nasi 1 Porsi",
+          "price": 5000,
+          "qty": 1,
+          "subtotal": 5000
+        }
+      ],
+      "total_price": 5000,
+      "order_day": "Pesan Hari Ini (Minggu, 11 Okt)",
+      "order_date": "2026-10-11",
+      "created_at": "2026-10-11T07:20:32.945Z"
+    },
+    {
+      "order_number": "ORD-1791694648340-606",
+      "user_name": "Budi Santoso",
+      "company": "PT Telkom Indonesia",
+      "division": "Legal & Compliance",
+      "location": "Pantry Lt. 3",
+      "items": [
+        {
+          "name": "Nasi 1 Porsi",
+          "price": 5000,
+          "qty": 1,
+          "subtotal": 5000
+        },
+        {
+          "name": "Rendang daging",
+          "price": 8000,
+          "qty": 1,
+          "subtotal": 8000
+        },
+        {
+          "name": "Oseng kangkung",
+          "price": 3000,
+          "qty": 1,
+          "subtotal": 3000
+        },
+        {
+          "name": "Sendok",
+          "price": 0,
+          "qty": 1,
+          "subtotal": 0
+        }
+      ],
+      "total_price": 16000,
+      "order_day": "Minggu",
+      "order_date": "2026-10-11",
+      "created_at": "2026-10-11T04:57:28.341Z"
+    }
+  ]
+}
