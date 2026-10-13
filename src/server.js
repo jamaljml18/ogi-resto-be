@@ -1,10 +1,12 @@
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config();
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
 const cors = require('cors');
 const db = require('./db');
 const { DAYS_OF_WEEK } = require('./seedData');
+const { periodBounds, employeeKey, summarizeKasbon } = require('./kasbon');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -35,29 +37,25 @@ const ADMIN_PASS = process.env.ADMIN_PASSWORD || 'admin123';
 const TOKEN_SECRET = process.env.JWT_SECRET || 'secret-catering-token';
 
 function generateToken(username) {
-  const payload = {
-    username,
-    role: 'admin',
-    exp: Date.now() + 24 * 60 * 60 * 1000 // 24 jam
-  };
-  return Buffer.from(JSON.stringify(payload) + '.' + TOKEN_SECRET).toString('base64');
+  const payload = Buffer.from(JSON.stringify({
+    username, role: 'admin', exp: Date.now() + 24 * 60 * 60 * 1000
+  })).toString('base64url');
+  const signature = crypto.createHmac('sha256',TOKEN_SECRET).update(payload).digest('base64url');
+  return payload + '.' + signature;
 }
-
 function verifyToken(token) {
-  if (!token) return null;
+  if (typeof token !== 'string') return null;
   try {
-    const safeToken = String(token).replace(/ /g, '+');
-    const raw = Buffer.from(safeToken, 'base64').toString('utf8');
-    const separator = '.' + TOKEN_SECRET;
-    const lastIndex = raw.lastIndexOf(separator);
-    if (lastIndex === -1) return null;
-    const jsonStr = raw.slice(0, lastIndex);
-    const payload = JSON.parse(jsonStr);
-    if (payload.exp < Date.now()) return null;
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const expected = crypto.createHmac('sha256',TOKEN_SECRET).update(parts[0]).digest();
+    const supplied = Buffer.from(parts[1],'base64url');
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied,expected)) return null;
+    const payload = JSON.parse(Buffer.from(parts[0],'base64url').toString('utf8'));
+    if (payload.role !== 'admin' || payload.username !== ADMIN_USER ||
+        !Number.isFinite(payload.exp) || payload.exp <= Date.now()) return null;
     return payload;
-  } catch (e) {
-    return null;
-  }
+  } catch {return null;}
 }
 
 function requireAuth(req, res, next) {
@@ -78,8 +76,7 @@ function requireAuth(req, res, next) {
 app.post(['/api/auth/login', '/api/admin/login'], (req, res) => {
   const { username, password } = req.body;
   const isEnvMatch = username === ADMIN_USER && password === ADMIN_PASS;
-  const isDemoMatch = username === 'admin' && password === 'admin123';
-  if (isEnvMatch || isDemoMatch) {
+  if (isEnvMatch) {
     const token = generateToken(username);
     return res.json({
       success: true,
@@ -307,10 +304,10 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
     const { search, company, division, location, date, day, startDate, endDate, month, year } = req.query;
     const orders = await db.getOrders({ search, company, division, location, date, day, startDate, endDate, month, year });
 
-    // Akumulasi total bayar harian per pemesan pada hari/tanggal yang sama
+    // Akumulasi per nama, perusahaan, divisi, dan tanggal pengiriman yang sama.
     const userDailyTotals = {};
     orders.forEach((ord) => {
-      const uKey = `${(ord.user_name || '').trim().toLowerCase()}___${ord.order_date}`;
+      const uKey = JSON.stringify([employeeKey(ord), ord.order_date]);
       userDailyTotals[uKey] = (userDailyTotals[uKey] || 0) + (Number(ord.total_price) || 0);
     });
 
@@ -338,7 +335,7 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
         ? ord.items.filter((it) => it && !it._meta).map((it) => `${it.name} (${it.qty}x)`).join(', ')
         : '';
 
-      const uKey = `${(ord.user_name || '').trim().toLowerCase()}___${ord.order_date}`;
+      const uKey = JSON.stringify([employeeKey(ord), ord.order_date]);
       const dailyTotal = userDailyTotals[uKey] || ord.total_price;
 
       const row = [
@@ -377,100 +374,73 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
 // Ekspor Rekap Kasbon Bulanan ke CSV (Format Matriks Tanggal 1 s/d Akhir Bulan)
 app.get('/api/admin/kasbon/export-csv', requireAuth, async (req, res) => {
   try {
+    const {month,year,company,division} = req.query;
+    const {period} = periodBounds(month,year);
+    const [orders,payments] = await Promise.all([
+      db.getKasbonOrders({month,year,company,division}),db.getKasbonPayments(month,year)
+    ]);
+    const users = summarizeKasbon(orders,payments);
+    const daysInMonth = new Date(Date.UTC(Number(year),Number(month),0)).getUTCDate();
+    const cell = value => '"' + sanitizeForCsv(String(value ?? '')).replace(/"/g,'""') + '"';
+    const headers = ['No','Nama Pemesan','Perusahaan','Divisi'];
+    for (let day=1;day<=daysInMonth;day++) headers.push('Tgl '+day);
+    headers.push('Total Kasbon Bulan Ini (Rp)','Sudah Bayar','Tanggal Konfirmasi');
+    const rows = [headers.map(cell).join(';')];
+    users.forEach((user,index) => {
+      const row=[index+1,user.userName,user.company,user.division];
+      for (let day=1;day<=daysInMonth;day++) {
+        const data=user.days[day],parts=[];
+        if (data?.hasKasbon) parts.push('Kasbon (Rp '+data.kasbonAmount.toLocaleString('id-ID')+')');
+        if (data?.hasCash) parts.push('Cash (Rp '+data.cashAmount.toLocaleString('id-ID')+')');
+        row.push(parts.join(' / ') || '-');
+      }
+      row.push(user.totalKasbon,user.totalKasbon>0 ? (user.isPaid ? 'Sudah bayar' : 'Belum bayar') : '-',
+        user.paidAt || '');
+      rows.push(row.map(cell).join(';'));
+    });
+    res.setHeader('Content-Type','text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition','attachment; filename="Rekap_Kasbon_'+period.slice(0,7)+'.csv"');
+    res.send('\uFEFF'+rows.join('\r\n'));
+  } catch(error) {
+    console.error('Kasbon export failed:',error.message);
+    res.status(error.status || 503).json({error:error.status ? error.message :
+      'Gagal mengekspor kasbon. Periksa koneksi Supabase dan tabel kasbon_payments.'});
+  }
+});
+
+app.get('/api/admin/session', requireAuth, (req, res) => {
+  res.json({ user: { username: req.user.username, role: 'admin' } });
+});
+
+app.get('/api/admin/kasbon', requireAuth, async (req, res) => {
+  try {
     const { month, year, company, division } = req.query;
-    const selectedMonth = parseInt(month, 10) || (new Date().getMonth() + 1);
-    const selectedYear = parseInt(year, 10) || new Date().getFullYear();
-
-    const orders = await db.getOrders({
-      company,
-      division,
-      month: selectedMonth,
-      year: selectedYear
-    });
-
-    const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate();
-
-    // Grouping per pemesan
-    const userMap = {};
-    orders.forEach((ord) => {
-      const uName = (ord.user_name || '').trim();
-      if (!uName) return;
-      const key = `${uName}___${ord.company || ''}___${ord.division || ''}`;
-      if (!userMap[key]) {
-        userMap[key] = {
-          userName: uName,
-          company: ord.company || '-',
-          division: ord.division || '-',
-          ordersByDay: {},
-          totalKasbon: 0
-        };
-      }
-
-      const ordDate = ord.order_date || (ord.created_at ? ord.created_at.split('T')[0] : '');
-      if (ordDate) {
-        const dayNum = parseInt(ordDate.split('-')[2], 10);
-        if (dayNum >= 1 && dayNum <= daysInMonth) {
-          if (!userMap[key].ordersByDay[dayNum]) {
-            userMap[key].ordersByDay[dayNum] = [];
-          }
-          userMap[key].ordersByDay[dayNum].push(ord);
-        }
-      }
-
-      if (ord.payment_method === 'Kasbon') {
-        userMap[key].totalKasbon += Number(ord.total_price) || 0;
-      }
-    });
-
-    const userList = Object.values(userMap).sort(
-      (a, b) => b.totalKasbon - a.totalKasbon || a.userName.localeCompare(b.userName)
-    );
-
-    // Headers
-    const headers = ['No', 'Nama Pemesan', 'Perusahaan', 'Divisi'];
-    for (let d = 1; d <= daysInMonth; d++) {
-      headers.push(`Tgl ${d}`);
+    const { period } = periodBounds(month, year);
+    const [orders, payments] = await Promise.all([
+      db.getKasbonOrders({ month, year, company, division }), db.getKasbonPayments(month, year)
+    ]);
+    res.json({ period, orders, rows: summarizeKasbon(orders, payments) });
+  } catch (error) {
+    console.error('Kasbon report failed:', error.message);
+    res.status(error.status || 503).json({ error: error.status ? error.message :
+      'Gagal memuat kasbon. Periksa koneksi Supabase dan tabel kasbon_payments.' });
+  }
+});
+app.put('/api/admin/kasbon/payments', requireAuth, async (req, res) => {
+  try {
+    const { month, year, employeeKey, isPaid } = req.body || {};
+    periodBounds(month, year);
+    if (typeof isPaid !== 'boolean' || typeof employeeKey !== 'string' || !/^[a-f0-9]{64}$/.test(employeeKey)) {
+      return res.status(400).json({ error: 'Identitas karyawan atau status pembayaran tidak valid.' });
     }
-    headers.push('Total Kasbon Bulan Ini (Rp)');
-
-    const rows = [headers.join(';')];
-
-    userList.forEach((user, idx) => {
-      const row = [
-        idx + 1,
-        `"${sanitizeForCsv(user.userName)}"`,
-        `"${sanitizeForCsv(user.company)}"`,
-        `"${sanitizeForCsv(user.division)}"`
-      ];
-
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dayOrders = user.ordersByDay[d] || [];
-        if (dayOrders.length === 0) {
-          row.push('"- "');
-        } else {
-          const hasKasbon = dayOrders.some((o) => o.payment_method === 'Kasbon');
-          const dayTotal = dayOrders.reduce((s, o) => s + (Number(o.total_price) || 0), 0);
-          if (hasKasbon) {
-            row.push(`"Kasbon (Rp ${dayTotal.toLocaleString('id-ID')})"`);
-          } else {
-            row.push(`"Cash (Rp ${dayTotal.toLocaleString('id-ID')})"`);
-          }
-        }
-      }
-
-      row.push(user.totalKasbon);
-      rows.push(row.join(';'));
+    const payment = await db.setKasbonPayment({
+      month, year, key: employeeKey, isPaid, admin: req.user.username
     });
-
-    const csvContent = '\uFEFF' + rows.join('\r\n');
-    const mStr = String(selectedMonth).padStart(2, '0');
-    const filename = `Rekap_Kasbon_Bulanan_${selectedYear}_${mStr}.csv`;
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.status(200).send(csvContent);
-  } catch (err) {
-    console.error('Error export kasbon CSV:', err);
-    res.status(500).json({ error: 'Gagal mengekspor data kasbon: ' + err.message });
+    res.json({ success: true, payment });
+  } catch (error) {
+    console.error('Kasbon payment failed:', error.message);
+    res.status(error.status || 503).json({ error: error.status ? error.message :
+      'Status belum tersimpan. Periksa koneksi Supabase dan tabel kasbon_payments.' });
   }
 });
 

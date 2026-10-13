@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { INITIAL_MENUS, DAYS_OF_WEEK } = require('./seedData');
+const { periodBounds, employeeKey, paymentMethod } = require('./kasbon');
 
 const rawSupabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseUrl = rawSupabaseUrl.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
@@ -26,6 +27,22 @@ if (isSupabaseConfigured) {
   }
 } else {
   console.log('[Database] Supabase belum dikonfigurasi. Menggunakan Local JSON Storage (Otomatis beralih ke Supabase saat .env diisi).');
+}
+
+// Identify a public key without logging or exposing its value.
+function requireKasbonBackendKey() {
+  if (!supabase) return;
+  let role = '';
+  try {
+    if (supabaseKey.startsWith('eyJ')) {
+      role = JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64url').toString('utf8')).role;
+    }
+  } catch { /* Invalid credentials are handled by Supabase. */ }
+  if (role === 'anon' || role === 'authenticated' || supabaseKey.startsWith('sb_publishable_')) {
+    const error = new Error('SUPABASE_KEY backend memakai key publik. Ganti dengan service_role atau secret key Supabase, lalu restart backend.');
+    error.status = 503;
+    throw error;
+  }
 }
 
 // Helper: Pengurutan Kategori & ID Numerik Alami
@@ -116,6 +133,75 @@ function writeLocalStore(data) {
 
 // API DATABASE INTERFACE
 const db = {
+  // Configured cloud errors must never silently save a payment locally.
+  async getKasbonOrders({ month, year, company, division }) {
+    const { period, nextMonth } = periodBounds(month, year);
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    if (supabase) {
+      const orders = [];
+      for (let offset = 0; ; offset += 1000) {
+        let query = supabase.from('orders').select('*')
+          .gte('order_date', period).lt('order_date', nextMonth).order('id')
+          .range(offset, offset + 999);
+        if (company && company !== 'Semua') query = query.eq('company', company);
+        if (division && division !== 'Semua') query = query.eq('division', division);
+        const { data, error } = await query;
+        if (error) throw error;
+        orders.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      return orders;
+    }
+    return readLocalStore().orders.filter(order =>
+      order.order_date >= period && order.order_date < nextMonth &&
+      (!company || company === 'Semua' || order.company === company) &&
+      (!division || division === 'Semua' || order.division === division));
+  },
+  async getKasbonPayments(month, year) {
+    requireKasbonBackendKey();
+    const { period } = periodBounds(month, year);
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    if (supabase) {
+      const payments = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await supabase.from('kasbon_payments').select('*')
+          .eq('period_month', period).order('employee_key').range(offset, offset + 999);
+        if (error) throw error;
+        payments.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      return payments;
+    }
+    return (readLocalStore().kasbon_payments || []).filter(payment => payment.period_month === period);
+  },
+  async setKasbonPayment({ month, year, key, isPaid, admin }) {
+    requireKasbonBackendKey();
+    const { period } = periodBounds(month, year);
+    const orders = await this.getKasbonOrders({ month, year });
+    const employeeOrders = orders.filter(order => employeeKey(order) === key && paymentMethod(order) === 'Kasbon');
+    const amount = employeeOrders.reduce((sum, order) => sum + (Number(order.total_price) || 0), 0);
+    if (!employeeOrders.length || amount <= 0) {
+      const error = new Error('Tagihan kasbon karyawan pada periode ini tidak ditemukan.');
+      error.status = 404; throw error;
+    }
+    const employee = employeeOrders[0];
+    const record = { employee_key: key, period_month: period, user_name: employee.user_name,
+      company: employee.company, division: employee.division, kasbon_amount: amount,
+      is_paid: isPaid, paid_at: isPaid ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString(), updated_by: admin };
+    if (supabase) {
+      const { data, error } = await supabase.from('kasbon_payments')
+        .upsert(record, { onConflict: 'employee_key,period_month' }).select().single();
+      if (error) throw error;
+      return data;
+    }
+    const store = readLocalStore();
+    store.kasbon_payments = (store.kasbon_payments || []).filter(payment =>
+      !(payment.employee_key === key && payment.period_month === period));
+    store.kasbon_payments.push(record);
+    writeLocalStore(store);
+    return record;
+  },
   // Ambil menu untuk hari tertentu (untuk tampilan pengguna / pelanggan)
   async getMenusByDay(dayName) {
     if (supabase) {
@@ -156,30 +242,28 @@ const db = {
 
   // Ambil semua master menu beserta matriks jadwal (untuk Halaman Admin)
   async getAllMenusWithSchedules() {
+    if (isSupabaseConfigured && !supabase) {
+      throw new Error('Koneksi Supabase gagal dibuat. Periksa konfigurasi backend.');
+    }
     if (supabase) {
-      try {
-        const { data: menus, error: menuErr } = await supabase
-          .from('menus')
-          .select('*')
-          .order('id');
-        if (menuErr) throw menuErr;
+      const { data: menus, error: menuErr } = await supabase
+        .from('menus')
+        .select('*')
+        .order('id');
+      if (menuErr) throw new Error('Gagal memuat menu dari Supabase: ' + menuErr.message);
 
-        const { data: schedules, error: schedErr } = await supabase
-          .from('menu_schedules')
-          .select('*');
-        if (schedErr) throw schedErr;
+      const { data: schedules, error: schedErr } = await supabase
+        .from('menu_schedules')
+        .select('*');
+      if (schedErr) throw new Error('Gagal memuat jadwal menu dari Supabase: ' + schedErr.message);
 
-        // Map schedules by menu_id
-        const schedMap = {};
-        (schedules || []).forEach((s) => {
-          if (!schedMap[s.menu_id]) schedMap[s.menu_id] = {};
-          schedMap[s.menu_id][s.day_name] = s.is_available;
-        });
+      const schedMap = {};
+      (schedules || []).forEach((s) => {
+        if (!schedMap[s.menu_id]) schedMap[s.menu_id] = {};
+        schedMap[s.menu_id][s.day_name] = s.is_available;
+      });
 
-        return { menus: sortMenusNaturally(menus), schedules: schedMap };
-      } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
-      }
+      return { menus: sortMenusNaturally(menus), schedules: schedMap };
     }
 
     const store = readLocalStore();
@@ -197,22 +281,34 @@ const db = {
       is_active: true
     };
 
+    if (isSupabaseConfigured && !supabase) {
+      throw new Error('Koneksi Supabase gagal dibuat. Periksa konfigurasi backend.');
+    }
     if (supabase) {
+      const { error: insErr } = await supabase.from('menus').insert(newMenu);
+      if (insErr) throw new Error('Gagal menyimpan menu di Supabase: ' + insErr.message);
+
+      const scheduleInserts = DAYS_OF_WEEK.map((day) => ({
+        menu_id: id,
+        day_name: day,
+        is_available: schedules && schedules[day] !== undefined ? Boolean(schedules[day]) : true
+      }));
+      let schedErr;
       try {
-        const { error: insErr } = await supabase.from('menus').insert(newMenu);
-        if (insErr) throw insErr;
-
-        const scheduleInserts = DAYS_OF_WEEK.map((day) => ({
-          menu_id: id,
-          day_name: day,
-          is_available: schedules && schedules[day] !== undefined ? Boolean(schedules[day]) : true
-        }));
-
-        await supabase.from('menu_schedules').insert(scheduleInserts);
-        return newMenu;
-      } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        ({ error: schedErr } = await supabase.from('menu_schedules').insert(scheduleInserts));
+      } catch (error) {
+        schedErr = error;
       }
+      if (schedErr) {
+        try {
+          const { error: rollbackErr } = await supabase.from('menus').delete().eq('id', id);
+          if (rollbackErr) console.error('Gagal membatalkan menu setelah jadwal gagal disimpan:', rollbackErr);
+        } catch (rollbackErr) {
+          console.error('Gagal membatalkan menu setelah jadwal gagal disimpan:', rollbackErr);
+        }
+        throw new Error('Gagal menyimpan jadwal menu di Supabase: ' + schedErr.message);
+      }
+      return newMenu;
     }
 
     // Local Fallback
