@@ -234,6 +234,21 @@ app.post('/api/admin/menus', requireAuth, async (req, res) => {
   }
 });
 
+// Simpan Perubahan Jadwal Menu Mingguan (Senin s/d Minggu)
+app.put(['/api/admin/menus/schedules', '/api/admin/schedules'], requireAuth, async (req, res) => {
+  try {
+    const { schedules } = req.body;
+    if (!schedules || typeof schedules !== 'object') {
+      return res.status(400).json({ error: 'Format data jadwal tidak valid!' });
+    }
+    await db.updateSchedules(schedules);
+    res.json({ success: true, message: 'Jadwal menu mingguan berhasil diperbarui!' });
+  } catch (err) {
+    console.error('Error update schedules:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Edit / Update Menu Tertentu
 app.put('/api/admin/menus/:id', requireAuth, async (req, res) => {
   try {
@@ -263,21 +278,6 @@ app.delete('/api/admin/menus/:id', requireAuth, async (req, res) => {
     res.json({ success: true, message: 'Menu berhasil dihapus!' });
   } catch (err) {
     console.error('Error delete menu:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Simpan Perubahan Jadwal Menu Mingguan (Senin s/d Minggu)
-app.put(['/api/admin/menus/schedules', '/api/admin/schedules'], requireAuth, async (req, res) => {
-  try {
-    const { schedules } = req.body;
-    if (!schedules || typeof schedules !== 'object') {
-      return res.status(400).json({ error: 'Format data jadwal tidak valid!' });
-    }
-    await db.updateSchedules(schedules);
-    res.json({ success: true, message: 'Jadwal menu mingguan berhasil diperbarui!' });
-  } catch (err) {
-    console.error('Error update schedules:', err);
     res.status(500).json({ error: err.message });
   }
 });

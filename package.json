@@ -5,7 +5,13 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node src/server.js",
-    "test": "node --test tests/kasbon.test.js tests/whatsapp.test.js"
+    "test": "node --test tests/kasbon.test.js tests/whatsapp.test.js",
+    "bot:wa": "node whatsapp-bot/worker.mjs",
+    "bot:groups": "node whatsapp-bot/worker.mjs --list-groups",
+    "bot:code": "node whatsapp-bot/worker.mjs --list-groups --pairing-code",
+    "bot:pair": "node whatsapp-bot/worker.mjs --list-groups --reset-session",
+    "bot:check": "node whatsapp-bot/worker.mjs --check",
+    "test:bot": "node --test whatsapp-bot/tests/*.test.mjs"
   },
   "keywords": [],
   "author": "",

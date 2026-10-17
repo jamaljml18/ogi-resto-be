@@ -29,14 +29,14 @@ test('Legacy item metadata is respected for Kasbon',()=>{
   const [row]=summarizeKasbon([{...base,total_price:12000,items:[{_meta:true,payment_method:'Kasbon'}]}]);
   assert.equal(row.totalKasbon,12000);
 });
-function loadDb(cloud, key = 'synthetic') {
+function loadDb(cloud, key = 'synthetic', clock = Date) {
   let store={orders:[...orders,{...orders[0],order_date:'2026-02-01'}],menus:[],schedules:{}};
   let writes=0;
   const fakeFs={existsSync:()=>true,readFileSync:()=>JSON.stringify(store),
     writeFileSync:(_,data)=>{store=JSON.parse(data);writes++;}};
-  const context={Buffer,module:{exports:{}},process:{env:cloud ? {SUPABASE_URL:'https://example.supabase.co',SUPABASE_KEY:key} : {}},
+  const context={Buffer,Date:clock,module:{exports:{}},process:{env:cloud ? {SUPABASE_URL:'https://example.supabase.co',SUPABASE_KEY:key} : {}},
     __dirname:path.resolve(__dirname,'../src'),console:{log(){},warn(){},error(){}},
-    require:name=>name==='fs' ? fakeFs : name==='@supabase/supabase-js' ? {createClient:()=>cloud} :
+    require:name=>name==='fs' ? fakeFs : name==='@supabase/supabase-js' ? {createClient:()=>{if(cloud?.initError) throw Error('Synthetic initialization failure');return cloud}} :
       name==='./seedData' ? {INITIAL_MENUS:[],DAYS_OF_WEEK:[]} :
       name==='./whatsappWebhook' ? require('../src/whatsappWebhook') :
       name==='./paymentHistory' ? require('../src/paymentHistory') :
@@ -365,4 +365,78 @@ test('Payment management API requires admin and passes manual dates and operator
   await routes.find(route=>route.method==='put'&&route.endpoint==='/api/admin/history-payments/:id')
     .handlers[1]({body:{...historyInput,payment_date:'2026-02-30'},params:{id:'9'},user:{username:'operator'}},invalid);
   assert.equal(invalid.code,400);assert.equal(historyCalls.length,3);
+});
+
+test('Queued group payments preserve the backend receipt date across retries',async()=>{
+  const {db}=loadDb();
+  const payment=await db.createPaymentHistory({...historyInput,payment_date:'1900-01-01'},
+    {messageId:'baileys:synthetic-queued',receivedAt:'2026-10-17T16:59:00.000Z'});
+  assert.equal(payment.payment_date,'2026-10-17');
+  const duplicate=await db.createPaymentHistory(historyInput,
+    {messageId:'baileys:synthetic-queued',receivedAt:'2026-10-18T17:00:00.000Z'});
+  assert.equal(duplicate,null);
+  await assert.rejects(()=>db.createPaymentHistory(historyInput,{receivedAt:'invalid'}),error=>error.status===400);
+});
+
+test('Concurrent menu creation at an identical timestamp keeps IDs distinct', async () => {
+  class FrozenDate extends Date { static now() { return 1234567890000; } }
+  const { db, getStore } = loadDb(undefined, 'synthetic', FrozenDate);
+  const menus = await Promise.all(Array.from({ length: 100 }, (_, index) =>
+    db.createMenu({ name: 'Synthetic ' + index, price: 5000, category: 'Lauk', schedules: {} })));
+  assert.equal(new Set(menus.map(menu => menu.id)).size, 100);
+  assert.ok(menus.every(menu => menu.id.length <= 50));
+  assert.equal(getStore().menus.length, 100);
+});
+
+test('Configured cloud outages never silently read or write a different local dataset', async () => {
+  const operations = [
+    db => db.getMenusByDay('Senin'),
+    db => db.updateMenu('m-1', { name: 'Synthetic', price: 5000, schedules: {} }),
+    db => db.deleteMenu('m-1'),
+    db => db.updateSchedules({ 'm-1': { Senin: true } }),
+    db => db.createOrder({ userName: 'Synthetic', company: 'PT Test', division: 'QA',
+      location: 'Office', items: [], totalPrice: 0 }),
+    db => db.getOrders({})
+  ];
+  for (const operation of operations) {
+    const { db, writes } = loadDb({ from() { throw Error('Synthetic unavailable cloud'); } });
+    await assert.rejects(() => operation(db), /Synthetic unavailable cloud/);
+    assert.equal(writes(), 0);
+  }
+});
+
+test('Configured but uninitializable cloud client also fails closed on legacy operations', async () => {
+  for (const operation of [
+    db => db.getMenusByDay('Senin'),
+    db => db.updateMenu('m-1', { name: 'Synthetic' }),
+    db => db.deleteMenu('m-1'),
+    db => db.updateSchedules({}),
+    db => db.createOrder({}),
+    db => db.getOrders({})
+  ]) {
+    const { db, writes } = loadDb({ initError: true });
+    await assert.rejects(() => operation(db), /Koneksi Supabase tidak tersedia/);
+    assert.equal(writes(), 0);
+  }
+});
+
+test('Menu deletion uses one parent DELETE so the FK cascade is atomic', async () => {
+  const tables = [];
+  const { db, writes } = loadDb({ from(table) {
+    tables.push(table);
+    return { delete() { return this; }, async eq(field, value) {
+      assert.equal(field, 'id'); assert.equal(value, 'm-1');
+      return { error: null };
+    } };
+  } });
+  await db.deleteMenu('m-1');
+  assert.deepEqual(tables, ['menus']);
+  assert.equal(writes(), 0);
+});
+
+test('Schedule aliases are registered before the dynamic menu update route', () => {
+  const { routes } = loadServer();
+  const index = path => routes.findIndex(route => route.method === 'put' && route.endpoint === path);
+  assert.ok(index('/api/admin/menus/schedules') < index('/api/admin/menus/:id'));
+  assert.ok(index('/api/admin/schedules') < index('/api/admin/menus/:id'));
 });

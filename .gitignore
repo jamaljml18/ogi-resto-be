@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 *.log
 npm-debug.log*
+
+# Private Baileys sessions, queues and process lock
+whatsapp-bot/.state/

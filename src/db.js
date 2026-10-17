@@ -156,9 +156,15 @@ const db = {
     return { payments: payments.slice(0, 50), hasMore: payments.length > 50, page };
   },
 
-  async createPaymentHistory(input, { messageId, manual = false, admin } = {}) {
+  async createPaymentHistory(input, { messageId, manual = false, admin, receivedAt } = {}) {
     requireKasbonBackendKey();
-    const record = manual ? validateManualPaymentHistory(input) : validatePaymentHistory(input);
+    const receivedDate = receivedAt === undefined ? new Date() : new Date(receivedAt);
+    if (!Number.isFinite(receivedDate.getTime())) {
+      const error = new Error('Waktu penerimaan pembayaran tidak valid.');
+      error.status = 400;
+      throw error;
+    }
+    const record = manual ? validateManualPaymentHistory(input) : validatePaymentHistory(input, receivedDate);
     if (manual) record.updated_by = admin || null;
     if (messageId !== undefined) {
       if (typeof messageId !== 'string' || !messageId || messageId.length > 255) {
@@ -311,6 +317,7 @@ const db = {
   },
   // Ambil menu untuk hari tertentu (untuk tampilan pengguna / pelanggan)
   async getMenusByDay(dayName) {
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
       try {
         const { data: scheduleData, error: schedErr } = await supabase
@@ -334,7 +341,7 @@ const db = {
         if (menuErr) throw menuErr;
         return sortMenusNaturally(menus);
       } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        throw err;
       }
     }
 
@@ -379,7 +386,7 @@ const db = {
 
   // Tambah Menu Baru (Admin)
   async createMenu({ name, price, category, schedules }) {
-    const id = 'm-' + Date.now();
+    const id = 'm-' + Date.now() + '-' + crypto.randomUUID().replace(/-/g, '');
     const newMenu = {
       id,
       name,
@@ -431,6 +438,7 @@ const db = {
 
   // Edit / Update Menu (Admin)
   async updateMenu(id, { name, price, category, schedules }) {
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
       try {
         const updateData = {};
@@ -457,7 +465,7 @@ const db = {
 
         return { id, ...updateData };
       } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        throw err;
       }
     }
 
@@ -484,16 +492,15 @@ const db = {
 
   // Hapus / Delete Menu (Admin)
   async deleteMenu(id) {
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
       try {
-        // Hapus dari menu_schedules terlebih dahulu
-        await supabase.from('menu_schedules').delete().eq('menu_id', id);
-        // Hapus dari menus
+        // FK ON DELETE CASCADE removes schedules in the same database statement.
         const { error } = await supabase.from('menus').delete().eq('id', id);
         if (error) throw error;
         return { success: true };
       } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        throw err;
       }
     }
 
@@ -507,6 +514,7 @@ const db = {
 
   // Update Jadwal Menu Mingguan (Admin)
   async updateSchedules(newSchedules) {
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
       try {
         const rows = [];
@@ -526,7 +534,7 @@ const db = {
         if (error) throw error;
         return { success: true };
       } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        throw err;
       }
     }
 
@@ -538,6 +546,7 @@ const db = {
 
   // Simpan Pesanan Baru
   async createOrder(orderPayload) {
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     const randomSuffix = crypto.randomBytes(4).toString('hex').toUpperCase();
     const orderNumber = `ORD-${Date.now()}-${randomSuffix}`;
     const localDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date());
@@ -582,7 +591,7 @@ const db = {
         }
         return data || order;
       } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        throw err;
       }
     }
 
@@ -594,6 +603,7 @@ const db = {
 
   // Ambil Riwayat Pesanan dengan Filter (Mendukung Range Tanggal, Bulan, Tahun)
   async getOrders({ search, company, division, location, date, day, startDate, endDate, month, year }) {
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
       try {
         let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
@@ -641,7 +651,7 @@ const db = {
           };
         });
       } catch (err) {
-        console.warn('[Supabase Fallback to Local]:', err.message);
+        throw err;
       }
     }
 
