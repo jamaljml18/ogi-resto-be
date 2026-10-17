@@ -38,6 +38,8 @@ function loadDb(cloud, key = 'synthetic') {
     __dirname:path.resolve(__dirname,'../src'),console:{log(){},warn(){},error(){}},
     require:name=>name==='fs' ? fakeFs : name==='@supabase/supabase-js' ? {createClient:()=>cloud} :
       name==='./seedData' ? {INITIAL_MENUS:[],DAYS_OF_WEEK:[]} :
+      name==='./whatsappWebhook' ? require('../src/whatsappWebhook') :
+      name==='./paymentHistory' ? require('../src/paymentHistory') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../src/db.js'),'utf8'),context);
   return {db:context.module.exports,getStore:()=>store,writes:()=>writes};
@@ -112,16 +114,22 @@ function loadServer(mockOrders = orders) {
   const express=()=>app;express.json=()=>()=>{};
   const env={VERCEL:'1',ADMIN_USERNAME:'test-admin',ADMIN_PASSWORD:'test-password',JWT_SECRET:'test-signing-secret'};
   let saves=0;
+  const historyCalls=[];
   const context={module:{exports:{}},process:{env},Buffer,Date,__dirname:path.resolve(__dirname,'../src'),
     console:{log(){},error(){}},require:name=>name==='express' ? express : name==='cors' ? ()=>()=>{} :
       name==='dotenv' ? {config(){}} : name==='./db' ? {
         getOrders:async()=>mockOrders,
+        createPaymentHistory:async(input,options)=>{historyCalls.push({input,options});return {id:'9',...input}},
+        updatePaymentHistory:async(id,input,admin)=>{historyCalls.push({id,input,admin});return {id,...input}},
+        deletePaymentHistory:async(id,admin)=>{historyCalls.push({id,admin});return {id}},
         getKasbonOrders:async()=>orders,getKasbonPayments:async()=>[],
         setKasbonPayment:async input=>{saves++;return {is_paid:input.isPaid};}
       } : name==='./seedData' ? {DAYS_OF_WEEK:[]} :
+      name==='./whatsappWebhook' ? require('../src/whatsappWebhook') :
+      name==='./paymentHistory' ? require('../src/paymentHistory') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../src/server.js'),'utf8'),context);
-  return {routes,context,saves:()=>saves};
+  return {routes,context,historyCalls,saves:()=>saves};
 }
 function response(){return {code:200,headers:{},status(code){this.code=code;return this},
   json(data){this.data=data;return this},send(data){this.data=data;return this},
@@ -189,4 +197,172 @@ test('Public Supabase key gives actionable error without querying or writing pay
     await assert.rejects(()=>db.setKasbonPayment({month:10,year:2026,key:employeeKey(base),isPaid:true,admin:'tester'}),check);
     assert.equal(writes(),0);
   }
+});
+
+const {validatePaymentHistory,historyPage}=require('../src/paymentHistory');
+const historyInput={user_name:' Budi ',company:'PT A',division:'HR',payment_date:'2026-10-17'};
+test('History validates identities and assigns the server date instead of a client date',()=>{
+  const now=new Date('2026-10-17T17:00:00Z');
+  assert.equal(validatePaymentHistory(historyInput,now).user_name,'Budi');
+  for (const change of [{user_name:' '},{company:42},{division:'x'.repeat(256)}]) {
+    assert.throws(()=>validatePaymentHistory({...historyInput,...change},now),error=>error.status===400);
+  }
+  assert.equal(validatePaymentHistory({...historyInput,payment_date:'1900-01-01'},now).payment_date,'2026-10-18');
+  assert.equal(historyPage(),1);
+  for(const page of ['0','-1','1.5',[],{},'1000000']) assert.throws(()=>historyPage(page));
+});
+test('History local storage persists independently, sorts latest first and paginates',async()=>{
+  const {db,getStore}=loadDb();
+  for(let index=0;index<51;index++) await db.createPaymentHistory({...historyInput,payment_date:index===0?'2026-10-18':'2026-10-17'});
+  const first=await db.getPaymentHistory(1),second=await db.getPaymentHistory(2);
+  assert.equal(first.payments.length,50);assert.equal(first.hasMore,true);
+  assert.equal(first.payments[0].id,51);
+  assert.equal(first.payments[0].payment_date,require('../src/paymentHistory').jakartaDate());
+  assert.equal(second.payments.length,1);assert.equal(second.hasMore,false);
+  assert.equal(getStore().orders.length,3);
+});
+test('History cloud failures never save locally and public keys are rejected',async()=>{
+  const cloud={from(){throw Error('Synthetic cloud outage');}};
+  const {db,writes}=loadDb(cloud);
+  await assert.rejects(()=>db.createPaymentHistory(historyInput),/Synthetic cloud outage/);
+  await assert.rejects(()=>db.getPaymentHistory(),/Synthetic cloud outage/);
+  assert.equal(writes(),0);
+  const publicDb=loadDb(cloud,'sb_publishable_synthetic').db;
+  await assert.rejects(()=>publicDb.getPaymentHistory(),error=>error.status===503);
+  await assert.rejects(()=>publicDb.createPaymentHistory(historyInput),error=>error.status===503);
+});
+test('History uses the requested Supabase table and inserts only validated fields',async()=>{
+  let inserted;
+  const chain={insert(value){inserted=value;return this},select(){return this},
+    single:async()=>({data:{id:1,...inserted},error:null})};
+  const {db,writes}=loadDb({from(table){assert.equal(table,'history_payments');return chain;}});
+  const result=await db.createPaymentHistory({...historyInput,id:999,unwanted:'discard'});
+  assert.equal(result.id,1);assert.equal(result.user_name,'Budi');
+  assert.equal(inserted.unwanted,undefined);assert.equal(inserted.id,undefined);assert.equal(writes(),0);
+});
+test('History endpoints require admin login and reject invalid requests',async()=>{
+  const {routes}=loadServer();
+  for(const method of ['get','post']) {
+    const route=routes.find(route=>route.method===method && route.endpoint==='/api/admin/history-payments');
+    const res=response();let next=false;
+    route.handlers[0]({headers:{},query:{}},res,()=>{next=true;});
+    assert.equal(res.code,401);assert.equal(next,false);
+    const bad=response();
+    await route.handlers[1]({query:{page:'0'},body:{},user:{username:'tester'}},bad);
+    assert.equal(bad.code,400);
+  }
+});
+
+test('WhatsApp redelivery deduplicates persisted local history without changing the original date',async()=>{
+  const {db,getStore,writes}=loadDb();
+  const first=await db.createPaymentHistory(historyInput,{messageId:'wamid.saved'});
+  const duplicate=await db.createPaymentHistory({...historyInput,user_name:'Changed'},{messageId:'wamid.saved'});
+  assert.equal(duplicate,null);assert.equal(writes(),1);
+  assert.equal(getStore().history_payments.length,1);
+  assert.equal(getStore().history_payments[0].user_name,'Budi');
+  assert.equal(getStore().history_payments[0].payment_date,first.payment_date);
+});
+test('WhatsApp cloud inserts use a unique message key and preserve existing rows on redelivery',async()=>{
+  let captured,seen=false;
+  const chain={upsert(record,options){captured={record,options};return this},select(){return this},
+    async maybeSingle(){if(seen)return {data:null,error:null};seen=true;return {data:captured.record,error:null}}};
+  const {db,writes}=loadDb({from(table){assert.equal(table,'history_payments');return chain}});
+  const first=await db.createPaymentHistory(historyInput,{messageId:'wamid.cloud'});
+  const duplicate=await db.createPaymentHistory(historyInput,{messageId:'wamid.cloud'});
+  assert.equal(first.whatsapp_message_id,'wamid.cloud');assert.equal(duplicate,null);
+  assert.equal(captured.options.onConflict,'whatsapp_message_id');
+  assert.equal(captured.options.ignoreDuplicates,true);assert.equal(writes(),0);
+});
+test('WhatsApp verification and receiving endpoints are registered',()=>{
+  const {routes}=loadServer();
+  for(const method of ['get','post']) {
+    assert.ok(routes.find(route=>route.method===method && route.endpoint==='/api/webhooks/whatsapp'));
+  }
+});
+
+const { validateManualPaymentHistory, paymentHistoryId } = require('../src/paymentHistory');
+test('Manual payments validate actual dates while WhatsApp keeps a server assigned date', () => {
+  assert.equal(validateManualPaymentHistory({...historyInput,payment_date:'2024-02-29'}).payment_date,'2024-02-29');
+  for (const value of ['',null,'2026-02-29','2026-04-31','2026-2-01','0000-01-01','tomorrow']) {
+    assert.throws(()=>validateManualPaymentHistory({...historyInput,payment_date:value}),error=>error.status===400);
+  }
+  for (const id of ['0','-1','1.5','abc','9223372036854775808']) {
+    assert.throws(()=>paymentHistoryId(id),error=>error.status===400);
+  }
+  assert.equal(paymentHistoryId('9223372036854775807'),'9223372036854775807');
+});
+test('Admin can create a manual payment, correct identity/date, and hide it without losing deduplication',async()=>{
+  const {db,getStore}=loadDb();
+  const manual=await db.createPaymentHistory({...historyInput,payment_date:'2026-01-01'},{manual:true,admin:'operator'});
+  assert.equal(manual.payment_date,'2026-01-01');assert.equal(manual.updated_by,'operator');
+  const original=await db.createPaymentHistory(historyInput,{messageId:'wamid.editable'});
+  const changed=await db.updatePaymentHistory(String(original.id),
+    {...historyInput,user_name:'Budi Baru',payment_date:'2026-01-02',whatsapp_message_id:'spoofed',created_at:'spoofed'},'admin');
+  assert.equal(changed.user_name,'Budi Baru');assert.equal(changed.payment_date,'2026-01-02');
+  assert.equal(changed.whatsapp_message_id,'wamid.editable');assert.equal(changed.created_at,original.created_at);
+  assert.equal(changed.updated_by,'admin');assert.ok(changed.updated_at);
+  await db.deletePaymentHistory(String(original.id),'admin');
+  const listed=await db.getPaymentHistory();
+  assert.equal(listed.payments.length,1);assert.equal(listed.payments[0].id,manual.id);
+  const stored=getStore().history_payments.find(row=>row.id===original.id);
+  assert.ok(stored.deleted_at);assert.equal(stored.whatsapp_message_id,'wamid.editable');
+  assert.equal(await db.createPaymentHistory(historyInput,{messageId:'wamid.editable'}),null);
+  await assert.rejects(()=>db.updatePaymentHistory(String(original.id),historyInput,'admin'),error=>error.status===404);
+  await assert.rejects(()=>db.deletePaymentHistory(String(original.id),'admin'),error=>error.status===404);
+  assert.equal(getStore().orders.length,3);
+});
+test('Invalid manual dates and missing IDs do not write payment storage',async()=>{
+  const {db,writes}=loadDb();
+  await assert.rejects(()=>db.createPaymentHistory({...historyInput,payment_date:'2026-02-30'},{manual:true}),error=>error.status===400);
+  await assert.rejects(()=>db.updatePaymentHistory('999',historyInput,'admin'),error=>error.status===404);
+  await assert.rejects(()=>db.deletePaymentHistory('999','admin'),error=>error.status===404);
+  assert.equal(writes(),0);
+});
+test('Cloud corrections and deletion filter active records; cloud errors never fall back locally',async()=>{
+  const calls=[];
+  let updated;
+  const chain={update(record){updated=record;return this},eq(field,value){calls.push(['eq',field,value]);return this},
+    is(field,value){calls.push(['is',field,value]);return this},select(){return this},
+    maybeSingle:async()=>({data:{id:'9',...updated},error:null})};
+  const {db,writes}=loadDb({from(table){assert.equal(table,'history_payments');return chain}});
+  await db.updatePaymentHistory('9',{...historyInput,payment_date:'2026-10-01'},'operator');
+  assert.equal(updated.payment_date,'2026-10-01');assert.equal(updated.updated_by,'operator');
+  assert.equal(updated.whatsapp_message_id,undefined);
+  await db.deletePaymentHistory('9','operator');
+  assert.ok(updated.deleted_at);
+  assert.deepEqual(calls,[['eq','id','9'],['is','deleted_at',null],['eq','id','9'],['is','deleted_at',null]]);
+  assert.equal(writes(),0);
+  const broken=loadDb({from(){throw Error('Cloud offline');}});
+  await assert.rejects(()=>broken.db.updatePaymentHistory('9',historyInput,'operator'),/Cloud offline/);
+  await assert.rejects(()=>broken.db.deletePaymentHistory('9','operator'),/Cloud offline/);
+  assert.equal(broken.writes(),0);
+});
+test('Cloud history excludes deleted records and paginates 50 active rows',async()=>{
+  const calls=[];
+  const chain={select(){return this},is(field,value){calls.push([field,value]);return this},order(){return this},
+    range(from,to){assert.equal(from,50);assert.equal(to,100);return Promise.resolve({data:Array.from({length:51},(_,id)=>({id})),error:null})}};
+  const {db}=loadDb({from(){return chain}});
+  const listed=await db.getPaymentHistory(2);
+  assert.equal(listed.payments.length,50);assert.equal(listed.hasMore,true);
+  assert.deepEqual(calls,[['deleted_at',null]]);
+});
+test('Payment management API requires admin and passes manual dates and operator identity',async()=>{
+  const {routes,historyCalls}=loadServer();
+  for(const method of ['post','put','delete']){
+    const endpoint=method==='post'?'/api/admin/history-payments':'/api/admin/history-payments/:id';
+    const route=routes.find(route=>route.method===method&&route.endpoint===endpoint);
+    const denied=response();route.handlers[0]({headers:{},query:{}},denied,()=>assert.fail('Anonymous request'));
+    assert.equal(denied.code,401);
+    const res=response();
+    await route.handlers[1]({body:{...historyInput,payment_date:'2026-01-02'},params:{id:'9'},user:{username:'operator'}},res);
+    assert.equal(res.code,method==='post'?201:200);assert.equal(res.data.success,true);
+  }
+  assert.equal(historyCalls[0].input.payment_date,'2026-01-02');
+  assert.equal(historyCalls[0].options.manual,true);assert.equal(historyCalls[0].options.admin,'operator');
+  assert.equal(historyCalls[1].input.payment_date,'2026-01-02');assert.equal(historyCalls[1].admin,'operator');
+  assert.equal(historyCalls[2].admin,'operator');
+  const invalid=response();
+  await routes.find(route=>route.method==='put'&&route.endpoint==='/api/admin/history-payments/:id')
+    .handlers[1]({body:{...historyInput,payment_date:'2026-02-30'},params:{id:'9'},user:{username:'operator'}},invalid);
+  assert.equal(invalid.code,400);assert.equal(historyCalls.length,3);
 });

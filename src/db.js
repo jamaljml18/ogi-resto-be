@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { INITIAL_MENUS, DAYS_OF_WEEK } = require('./seedData');
 const { periodBounds, employeeKey, paymentMethod } = require('./kasbon');
+const { validatePaymentHistory, validateManualPaymentHistory, paymentHistoryId } = require('./paymentHistory');
 
 const rawSupabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseUrl = rawSupabaseUrl.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
@@ -133,6 +134,112 @@ function writeLocalStore(data) {
 
 // API DATABASE INTERFACE
 const db = {
+  async getPaymentHistory(page = 1) {
+    requireKasbonBackendKey();
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    const offset = (page - 1) * 50;
+    let payments;
+    if (supabase) {
+      const { data, error } = await supabase.from('history_payments')
+        .select('id,user_name,company,division,payment_date,created_at,whatsapp_message_id,updated_at,updated_by')
+        .is('deleted_at', null)
+        .order('payment_date', { ascending: false }).order('id', { ascending: false })
+        .range(offset, offset + 50);
+      if (error) throw error;
+      payments = data || [];
+    } else {
+      payments = [...(readLocalStore().history_payments || [])]
+        .filter(payment => !payment.deleted_at)
+        .sort((a, b) => b.payment_date.localeCompare(a.payment_date) || Number(b.id) - Number(a.id))
+        .slice(offset, offset + 51);
+    }
+    return { payments: payments.slice(0, 50), hasMore: payments.length > 50, page };
+  },
+
+  async createPaymentHistory(input, { messageId, manual = false, admin } = {}) {
+    requireKasbonBackendKey();
+    const record = manual ? validateManualPaymentHistory(input) : validatePaymentHistory(input);
+    if (manual) record.updated_by = admin || null;
+    if (messageId !== undefined) {
+      if (typeof messageId !== 'string' || !messageId || messageId.length > 255) {
+        const error = new Error('ID pesan WhatsApp tidak valid.');
+        error.status = 400;
+        throw error;
+      }
+      record.whatsapp_message_id = messageId;
+    }
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    if (supabase) {
+      const table = supabase.from('history_payments');
+      const { data, error } = messageId
+        ? await table.upsert(record, { onConflict: 'whatsapp_message_id', ignoreDuplicates: true }).select().maybeSingle()
+        : await table.insert(record).select().single();
+      if (error) throw error;
+      return data;
+    }
+    const store = readLocalStore();
+    store.history_payments = store.history_payments || [];
+    if (messageId && store.history_payments.some(payment => payment.whatsapp_message_id === messageId)) return null;
+    const payment = { ...record,
+      id: store.history_payments.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1,
+      created_at: new Date().toISOString() };
+    store.history_payments.push(payment);
+    writeLocalStore(store);
+    return payment;
+  },
+
+
+
+  async updatePaymentHistory(id, input, admin) {
+    requireKasbonBackendKey();
+    paymentHistoryId(id);
+    const record = { ...validateManualPaymentHistory(input),
+      updated_at: new Date().toISOString(), updated_by: admin || null };
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    if (supabase) {
+      const { data, error } = await supabase.from('history_payments').update(record)
+        .eq('id', id).is('deleted_at', null).select().maybeSingle();
+      if (error) throw error;
+      if (data) return data;
+    } else {
+      const store = readLocalStore();
+      const payment = (store.history_payments || []).find(row => String(row.id) === id && !row.deleted_at);
+      if (payment) {
+        Object.assign(payment, record);
+        writeLocalStore(store);
+        return payment;
+      }
+    }
+    const error = new Error('Riwayat pembayaran tidak ditemukan atau sudah dihapus.');
+    error.status = 404;
+    throw error;
+  },
+
+  async deletePaymentHistory(id, admin) {
+    requireKasbonBackendKey();
+    paymentHistoryId(id);
+    const now = new Date().toISOString();
+    const record = { deleted_at: now, updated_at: now, updated_by: admin || null };
+    if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    if (supabase) {
+      const { data, error } = await supabase.from('history_payments').update(record)
+        .eq('id', id).is('deleted_at', null).select('id').maybeSingle();
+      if (error) throw error;
+      if (data) return data;
+    } else {
+      const store = readLocalStore();
+      const payment = (store.history_payments || []).find(row => String(row.id) === id && !row.deleted_at);
+      if (payment) {
+        Object.assign(payment, record);
+        writeLocalStore(store);
+        return { id: payment.id };
+      }
+    }
+    const error = new Error('Riwayat pembayaran tidak ditemukan atau sudah dihapus.');
+    error.status = 404;
+    throw error;
+  },
+
   // Configured cloud errors must never silently save a payment locally.
   async getKasbonOrders({ month, year, company, division }) {
     const { period, nextMonth } = periodBounds(month, year);

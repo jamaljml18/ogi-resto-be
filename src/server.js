@@ -8,12 +8,19 @@ const db = require('./db');
 const { DAYS_OF_WEEK } = require('./seedData');
 const { periodBounds, employeeKey, summarizeKasbon } = require('./kasbon');
 
+const { validateManualPaymentHistory, paymentHistoryId, historyPage } = require('./paymentHistory');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, _res, buffer) => {
+    if (req.originalUrl.split('?')[0] === '/api/webhooks/whatsapp') req.rawBody = Buffer.from(buffer);
+  }
+}));
 
 // Helper: Nama hari dalam Bahasa Indonesia dari Date
 function getIndonesianDayName(date = new Date()) {
@@ -443,6 +450,60 @@ app.put('/api/admin/kasbon/payments', requireAuth, async (req, res) => {
       'Status belum tersimpan. Periksa koneksi Supabase dan tabel kasbon_payments.' });
   }
 });
+
+// Riwayat pembayaran manual (admin).
+app.get('/api/admin/history-payments', requireAuth, async (req, res) => {
+  try {
+    res.json(await db.getPaymentHistory(historyPage(req.query.page)));
+  } catch (error) {
+    console.error('Payment history failed:', error.message);
+    res.status(error.status || 503).json({ error: error.status ? error.message :
+      'Gagal memuat riwayat pembayaran. Periksa koneksi Supabase dan migrasi 002, 003, dan 004_history_payments_management.sql.' });
+  }
+});
+
+app.post('/api/admin/history-payments', requireAuth, async (req, res) => {
+  try {
+    const record = validateManualPaymentHistory(req.body);
+    const payment = await db.createPaymentHistory(record, { manual: true, admin: req.user.username });
+    res.status(201).json({ success: true, payment });
+  } catch (error) {
+    console.error('Save payment history failed:', error.message);
+    res.status(error.status || 503).json({ error: error.status ? error.message :
+      'Pembayaran belum tersimpan. Periksa koneksi Supabase dan migrasi 002, 003, dan 004_history_payments_management.sql.' });
+  }
+});
+
+
+app.put('/api/admin/history-payments/:id', requireAuth, async (req, res) => {
+  try {
+    const id = paymentHistoryId(req.params.id);
+    const record = validateManualPaymentHistory(req.body);
+    const payment = await db.updatePaymentHistory(id, record, req.user.username);
+    res.json({ success: true, payment });
+  } catch (error) {
+    console.error('Update payment history failed:', error.message);
+    res.status(error.status || 503).json({ error: error.status ? error.message :
+      'Perubahan belum tersimpan. Periksa koneksi Supabase dan migrasi 004_history_payments_management.sql.' });
+  }
+});
+
+app.delete('/api/admin/history-payments/:id', requireAuth, async (req, res) => {
+  try {
+    const id = paymentHistoryId(req.params.id);
+    const payment = await db.deletePaymentHistory(id, req.user.username);
+    res.json({ success: true, payment });
+  } catch (error) {
+    console.error('Delete payment history failed:', error.message);
+    res.status(error.status || 503).json({ error: error.status ? error.message :
+      'Riwayat belum dihapus. Periksa koneksi Supabase dan migrasi 004_history_payments_management.sql.' });
+  }
+});
+
+const { createWhatsappHandlers } = require('./whatsappWebhook');
+const whatsapp = createWhatsappHandlers({ db });
+app.get('/api/webhooks/whatsapp', whatsapp.verify);
+app.post('/api/webhooks/whatsapp', whatsapp.receive);
 
 // Health check
 app.get('/api/health', (req, res) => {

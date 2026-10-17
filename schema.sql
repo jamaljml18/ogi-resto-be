@@ -157,3 +157,41 @@ ALTER TABLE public.kasbon_payments ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.kasbon_payments FROM anon, authenticated;
 GRANT ALL ON public.kasbon_payments TO service_role;
 GRANT USAGE, SELECT ON SEQUENCE public.kasbon_payments_id_seq TO service_role;
+
+-- Riwayat pembayaran manual; akses hanya melalui API admin backend.
+CREATE TABLE IF NOT EXISTS public.history_payments (
+  id BIGSERIAL PRIMARY KEY,
+  user_name VARCHAR(255) NOT NULL CHECK (char_length(btrim(user_name)) > 0),
+  company VARCHAR(255) NOT NULL CHECK (char_length(btrim(company)) > 0),
+  division VARCHAR(255) NOT NULL CHECK (char_length(btrim(division)) > 0),
+  payment_date DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_history_payments_date
+  ON public.history_payments (payment_date DESC, id DESC);
+ALTER TABLE public.history_payments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.history_payments FROM anon, authenticated;
+GRANT ALL ON public.history_payments TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.history_payments_id_seq TO service_role;
+
+-- Jalankan setelah 002_history_payments.sql pada database yang sudah ada.
+ALTER TABLE public.history_payments
+  ADD COLUMN IF NOT EXISTS whatsapp_message_id VARCHAR(255);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_history_payments_whatsapp_message
+  ON public.history_payments (whatsapp_message_id);
+-- Berlaku untuk insert baru saja; data lama tetap menggunakan tanggal aslinya.
+ALTER TABLE public.history_payments
+  ALTER COLUMN payment_date SET DEFAULT ((NOW() AT TIME ZONE 'Asia/Jakarta')::DATE);
+
+-- Jalankan setelah migrasi 002 dan 003. Data pembayaran lama tetap disimpan.
+ALTER TABLE public.history_payments
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_history_payments_active_date
+  ON public.history_payments (payment_date DESC, id DESC)
+  WHERE deleted_at IS NULL;
+
+-- Hapus memakai deleted_at agar ID pesan tetap unik saat WhatsApp mengirim ulang.
+-- Akses tetap melalui backend service_role; tidak menambah akses publik.
