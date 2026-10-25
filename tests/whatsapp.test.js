@@ -118,3 +118,15 @@ test('Waiting errors distinguish incomplete legacy schema from missing RPC and c
   assert.match(waitingFailure({code:'42501'}).message,/Akses database/);
   assert.doesNotMatch(waitingFailure({code:'FETCH_ERROR'}).message,/migrasi/);
 });
+
+
+test('Company aliases in manual and WhatsApp payments become PT BMT, case insensitive', () => {
+  const { normalizeCompany } = require('../src/identity');
+  for (const company of ['PT BMT', 'pt bmt', ' Pt. BmT ', 'PT Bright Mobile Telecommunication', 'pt bright mobile telecommuncation', 'PT BRIGHT  MOBILE TELECOMMUNICATIONS']) {
+    assert.equal(normalizeCompany(company), 'PT BMT');
+    assert.equal(validatePaymentHistory({user_name:'Hanan',company,division:'HR'}).company,'PT BMT');
+    assert.equal(parseBayarCaption('/bayar\nHanan\n'+company+'\nHR').company,'PT BMT');
+  }
+  assert.equal(normalizeCompany('PT Contoh'), 'PT Contoh');
+  assert.equal(normalizeCompany('PT BMT Lain'), 'PT BMT Lain');
+});

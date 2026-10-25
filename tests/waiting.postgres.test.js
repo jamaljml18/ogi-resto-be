@@ -56,6 +56,27 @@ test('PostgreSQL waiting-payment transactions and concurrent operations', { time
     '::jsonb,'+quote(id)+','+received+",'test');";
   const settle = (number,action) => 'SELECT public.settle_waiting_order('+quote(number)+','+quote(action)+",'admin');";
 
+  await t.test('PT BMT migration preserves paid kasbon keys and legacy waiting receipts',async()=>{
+    const oldCompany='PT Bright Mobile Telecommuncation';
+    const legacy={...fixture('ORD-BMT-KASBON','BMT Legacy'),company:oldCompany,payment_method:'Kasbon'};
+    const oldKey=require('../src/kasbon').employeeKey(legacy);
+    sql('ALTER TABLE public.orders DISABLE TRIGGER canonicalize_company; ALTER TABLE public.waiting_payments DISABLE TRIGGER canonicalize_company; ALTER TABLE public.kasbon_payments DISABLE TRIGGER canonicalize_company;');
+    sql('INSERT INTO public.orders(order_number,user_name,company,division,location,items,total_price,order_day,order_date,payment_method) SELECT order_number,user_name,company,division,location,items,total_price,order_day,order_date,payment_method FROM jsonb_populate_record(NULL::public.orders,'+quote(JSON.stringify(legacy))+'::jsonb);');
+    sql('INSERT INTO public.kasbon_payments(employee_key,period_month,user_name,company,division,is_paid,paid_at) VALUES('+quote(oldKey)+",'2026-10-01','BMT Legacy',"+quote(oldCompany)+",'QA',true,now());");
+    const waiting={...fixture('ORD-BMT-WAIT','BMT Waiting'),company:oldCompany};
+    sql('SELECT public.create_waiting_order('+quote(JSON.stringify(waiting))+"::jsonb,repeat('fedcba98',8));");
+    sql('ALTER TABLE public.orders ENABLE TRIGGER canonicalize_company; ALTER TABLE public.waiting_payments ENABLE TRIGGER canonicalize_company; ALTER TABLE public.kasbon_payments ENABLE TRIGGER canonicalize_company;');
+    const migration=await readFile(join(__dirname,'../migrations/008_company_bmt.sql'),'utf8');
+    sql(migration);sql(migration);
+    const newKey=require('../src/kasbon').employeeKey({...legacy,company:'PT BMT'});
+    assert.equal(sql("SELECT employee_key FROM public.kasbon_payments WHERE user_name='BMT Legacy';"),newKey);
+    assert.equal(sql("SELECT is_paid FROM public.kasbon_payments WHERE user_name='BMT Legacy';"),'t');
+    assert.equal(sql("SELECT company FROM public.orders WHERE order_number='ORD-BMT-KASBON';"),'PT BMT');
+    const receipt=require('../src/paymentHistory').parseBayarCaption('/bayar\nBMT Waiting\npt bright mobile telecommunication\nQA');
+    const saved=json('SELECT public.record_payment_and_settle_waiting('+quote(JSON.stringify({...receipt,payment_date:'2026-10-25'}))+"::jsonb,'bmt-migration-receipt',clock_timestamp(),'test');");
+    assert.deepEqual(saved.settled_orders,['ORD-BMT-WAIT']);
+  });
+
   await t.test('Only one parallel checkout can reserve a normalized identity',async()=>{
     const results = await Promise.allSettled([
       concurrent('BEGIN;'+create('ORD-UNIQUE-A','Unique','a')+'SELECT pg_sleep(0.2);COMMIT;'),

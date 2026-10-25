@@ -1,3 +1,4 @@
+const { normalizeCompany } = require('./identity');
 function invalid(message) {
   const error = new Error(message);
   error.status = 400;
@@ -19,7 +20,7 @@ function validatePaymentHistory(body = {}, now = new Date()) {
     if (typeof value !== 'string' || !value.trim() || value.trim().length > 255) {
       invalid(label + ' wajib diisi, maksimal 255 karakter.');
     }
-    record[field] = value.trim();
+    record[field] = field === 'company' ? normalizeCompany(value) : value.trim();
   }
   // Tanggal selalu berasal dari waktu backend, bukan payload pengirim.
   record.payment_date = jakartaDate(now);
@@ -70,7 +71,7 @@ function paymentHistoryFilters(query = {}) {
   };
   for (const field of ['search', 'company', 'division']) {
     const value = text(field);
-    if (value && value !== 'Semua') filters[field] = value;
+    if (value && value !== 'Semua') filters[field] = field === 'company' ? normalizeCompany(value) : value;
   }
   const date = text('date'), startDate = text('startDate'), endDate = text('endDate');
   const month = text('month'), year = text('year');

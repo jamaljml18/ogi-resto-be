@@ -148,3 +148,13 @@ test('Real Baileys credentials and app-state keys survive encrypted serializatio
   const keys = await next.state.keys.get('app-state-sync-key', ['sample']);
   assert.deepEqual(Buffer.from(keys.sample.keyData), Buffer.from([1, 2, 3]));
 });
+
+
+test('Bot records old and mixed-case company captions as PT BMT', () => {
+  for(const company of ['pt bmt','PT Bright Mobile Telecommunication','pt bright mobile telecommuncation']) {
+    const entry=paymentFromMessage(image({message:{imageMessage:{caption:'/bayar\nHanan\n'+company+'\nHR'}}}),allowed);
+    assert.equal(entry.record.company,'PT BMT');
+    assert.equal(entry.record.user_name,'Hanan');
+    assert.equal(entry.record.division,'HR');
+  }
+});

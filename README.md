@@ -212,3 +212,9 @@ PT Contoh/pt contoh dan HR/hr. Penulisan asli tetap ditampilkan. Filter, akumula
 ringkasan, CSV, kasbon dan pencocokan laporan WA menggunakan aturan tersebut.
 Perusahaan/divisi/tanggal yang berbeda tetap dipisahkan. Kunci pelunasan lama tidak diubah,
 dan laporan pembayaran terpisah tidak dihapus atau digabung secara fisik.
+
+## Nama perusahaan PT BMT
+
+Nama perusahaan standar adalah **PT BMT**. Penulisan `pt bmt`, nama lama `PT Bright Mobile Telecommunication`, serta ejaan `PT Bright Mobile Telecommuncation` dikenali tanpa membedakan huruf besar/kecil dan disimpan sebagai PT BMT. Form pelanggan dan caption WhatsApp menggunakan nama pendek ini. Parser pembayaran yang sama dipakai oleh bot grup, webhook Meta, dan input manual.
+
+Jalankan migrasi `backend/migrations/008_company_bmt.sql` (pada folder backend: `migrations/008_company_bmt.sql`) setelah 001?007 untuk menyeragamkan data Supabase lama dan kunci rekap kasbon. Hentikan backend/bot sementara saat migrasi. Jika ada benturan identitas pesanan menunggu atau kunci kasbon, transaksi dibatalkan tanpa menghapus data; periksa benturan sebelum mencoba ulang. Setelah itu restart backend/bot dan build ulang frontend. Migrasi tidak mengubah menus/menu_schedules.

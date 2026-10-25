@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { identityPart, exactIdentityPattern } = require('./identity');
+const { identityPart, exactIdentityPattern, normalizeCompany } = require('./identity');
 const { createClient } = require('@supabase/supabase-js');
 const { INITIAL_MENUS, DAYS_OF_WEEK } = require('./seedData');
 const { validateOrderEdit, priceEditedItems, editFailure } = require('./orderEditing');
@@ -365,6 +365,7 @@ const db = {
 
   // Configured cloud errors must never silently save a payment locally.
   async getKasbonOrders({ month, year, company, division }) {
+    company = normalizeCompany(company);
     const { period, nextMonth } = periodBounds(month, year);
     if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
@@ -678,7 +679,7 @@ const db = {
     const order = {
       order_number: orderNumber,
       user_name: orderPayload.userName.trim(),
-      company: orderPayload.company.trim(),
+      company: normalizeCompany(orderPayload.company),
       division: orderPayload.division.trim(),
       location: orderPayload.location.trim(),
       items: orderPayload.items,
@@ -759,6 +760,7 @@ const db = {
 
   // Ambil Riwayat Pesanan dengan Filter (Mendukung Range Tanggal, Bulan, Tahun)
   async getOrders({ search, company, division, location, date, day, startDate, endDate, month, year }) {
+    company = normalizeCompany(company);
     if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
       try {
