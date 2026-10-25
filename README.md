@@ -204,3 +204,11 @@ yang ditentukan sebelum build. Worker Baileys bukan bagian dari Function dan tid
 dijalankan pada instance API; host di proses terus hidup dengan disk persisten.
 
 Lihat [panduan deployment frontend/API/bot](../frontend/DEPLOYMENT.md).
+
+## Pencocokan identitas tanpa membedakan huruf besar-kecil
+
+Nama, perusahaan dan divisi dicocokkan tanpa membedakan kapital, misalnya Hanan/hanan,
+PT Contoh/pt contoh dan HR/hr. Penulisan asli tetap ditampilkan. Filter, akumulasi harian,
+ringkasan, CSV, kasbon dan pencocokan laporan WA menggunakan aturan tersebut.
+Perusahaan/divisi/tanggal yang berbeda tetap dipisahkan. Kunci pelunasan lama tidak diubah,
+dan laporan pembayaran terpisah tidak dihapus atau digabung secara fisik.

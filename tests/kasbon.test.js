@@ -42,6 +42,7 @@ function loadDb(cloud, key = 'synthetic', clock = Date, envOverrides = {}) {
       name==='./paymentHistory' ? require('../src/paymentHistory') :
       name==='./waitingPayments' ? require('../src/waitingPayments') :
       name==='./orderEditing' ? require('../src/orderEditing') :
+      name==='./identity' ? require('../src/identity') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../src/db.js'),'utf8'),context);
   return {db:context.module.exports,getStore:()=>store,writes:()=>writes};
@@ -147,6 +148,7 @@ function loadServer(mockOrders = orders, envOverrides = {}) {
       name==='./paymentHistory' ? require('../src/paymentHistory') :
       name==='./waitingPayments' ? require('../src/waitingPayments') :
       name==='./orderEditing' ? require('../src/orderEditing') :
+      name==='./identity' ? require('../src/identity') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../src/server.js'),'utf8'),context);
   return {routes,context,historyCalls,waitingCalls,orderQueries,kasbonQueries,editCalls,checkoutCalls,saves:()=>saves};
@@ -507,7 +509,7 @@ test('History applies combined filters before pagination and excludes soft-delet
 test('Cloud history filters precede range and escape literal search wildcards', async () => {
   const calls = [];
   const chain = {};
-  for (const method of ['select', 'is', 'ilike', 'eq', 'gte', 'lte', 'order']) {
+  for (const method of ['select', 'is', 'ilike', 'eq', 'filter', 'gte', 'lte', 'order']) {
     chain[method] = (...args) => { calls.push([method, ...args]); return chain; };
   }
   chain.range = async (...args) => { calls.push(['range', ...args]); return { data: [], error: null }; };
@@ -833,4 +835,40 @@ test('Vercel refuses filesystem fallback when Supabase configuration is missing'
  const {db,writes}=loadDb(undefined,'synthetic',Date,{VERCEL:'1'});
  await assert.rejects(()=>db.getOrders({}),e=>e.status===503&&e.message.includes('Vercel'));
  assert.equal(writes(),0);
+});
+
+test('Names, companies and divisions ignore case without changing the existing employee hash',()=>{
+ const upper={...base,user_name:' Hanan ',company:'PT Contoh',division:'HR'};
+ const lower={...upper,user_name:'hanan',company:'pt contoh',division:'hr'};
+ assert.equal(employeeKey(upper),employeeKey(lower));
+ const legacy=crypto.createHash('sha256').update(JSON.stringify(['hanan','pt contoh','hr'])).digest('hex');
+ assert.equal(employeeKey(upper),legacy);
+ const grouped=groupOrdersByCustomerDay([{...upper,order_number:'ORD-CASE-A',total_price:3000,items:[]},{...lower,order_number:'ORD-CASE-B',total_price:7000,items:[]}]);
+ assert.equal(grouped.length,1);assert.equal(grouped[0].total_price,10000);
+});
+test('Local history, orders and kasbon filters match case variants but keep different divisions separate',async()=>{
+ const {db,getStore}=loadDb(),store=getStore();
+ store.orders=[
+  {...base,user_name:'Hanan',company:'PT Contoh',division:'HR',total_price:3000},
+  {...base,user_name:'hanan',company:'pt contoh',division:'hr',total_price:7000},
+  {...base,user_name:'Hanan',company:'PT Contoh',division:'IT',total_price:1000}
+ ];
+ store.history_payments=store.orders.map((row,i)=>({...row,id:i+1,payment_date:'2026-01-15'}));
+ assert.equal((await db.getOrders({search:'HANAN',company:'PT CONTOH',division:'hR'})).length,2);
+ assert.equal((await db.getKasbonOrders({month:1,year:2026,company:'pt CONTOH',division:'Hr'})).length,2);
+ assert.equal((await db.getPaymentHistory(1,{search:'HANAN',company:'pt CONTOH',division:'Hr'})).payments.length,2);
+});
+test('Cloud identity filters use escaped exact case-insensitive patterns before pagination',async()=>{
+ const {exactIdentityPattern}=require('../src/identity'),calls=[],chain={};
+ for(const method of ['select','is','ilike','eq','filter','gte','lt','lte','order','range'])chain[method]=(...args)=>{calls.push([method,...args]);return chain;};
+ chain.then=(resolve,reject)=>Promise.resolve({data:[],error:null}).then(resolve,reject);
+ const {db}=loadDb({from(){return chain;}});
+ const company='PT A.* + (Office)',division='HR_50%';
+ await db.getOrders({company,division});
+ await db.getKasbonOrders({month:1,year:2026,company,division});
+ await db.getPaymentHistory(1,{company,division});
+ assert.equal(calls.filter(call=>call[0]==='filter'&&call[1]==='company'&&call[2]==='imatch'&&call[3]===exactIdentityPattern(company)).length,3);
+ assert.equal(calls.filter(call=>call[0]==='filter'&&call[1]==='division'&&call[2]==='imatch'&&call[3]===exactIdentityPattern(division)).length,3);
+ assert.ok(new RegExp(exactIdentityPattern(company),'i').test('pt a.* + (office)'));
+ assert.ok(!new RegExp(exactIdentityPattern(company),'i').test('PT ABC Office'));
 });

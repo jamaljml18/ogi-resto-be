@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { identityPart } = require('./identity');
 function periodBounds(month, year) {
   const m = Number(month), y = Number(year);
   if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(y) || y < 2000 || y > 2100) {
@@ -9,7 +10,7 @@ function periodBounds(month, year) {
 }
 function employeeKey(order) {
   const identity = [order.user_name, order.company, order.division]
-    .map(value => String(value || '').trim().toLocaleLowerCase('id-ID'));
+    .map(identityPart);
   return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }
 function paymentMethod(order) {

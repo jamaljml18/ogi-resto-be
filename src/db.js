@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { identityPart, exactIdentityPattern } = require('./identity');
 const { createClient } = require('@supabase/supabase-js');
 const { INITIAL_MENUS, DAYS_OF_WEEK } = require('./seedData');
 const { validateOrderEdit, priceEditedItems, editFailure } = require('./orderEditing');
@@ -248,8 +249,8 @@ const db = {
         .select('id,user_name,company,division,payment_date,created_at,whatsapp_message_id,updated_at,updated_by')
         .is('deleted_at', null);
       if (filters.search) query = query.ilike('user_name', '%' + filters.search.replace(/[\\%_]/g, '\\$&') + '%');
-      if (filters.company) query = query.eq('company', filters.company);
-      if (filters.division) query = query.eq('division', filters.division);
+      if (filters.company) query = query.filter('company', 'imatch', exactIdentityPattern(filters.company));
+      if (filters.division) query = query.filter('division', 'imatch', exactIdentityPattern(filters.division));
       if (filters.startDate) query = query.gte('payment_date', filters.startDate);
       if (filters.endDate) query = query.lte('payment_date', filters.endDate);
       const { data, error } = await query
@@ -261,8 +262,8 @@ const db = {
       payments = [...(readLocalStore().history_payments || [])]
         .filter(payment => !payment.deleted_at &&
           (!filters.search || payment.user_name.toLocaleLowerCase('id-ID').includes(filters.search.toLocaleLowerCase('id-ID'))) &&
-          (!filters.company || payment.company === filters.company) &&
-          (!filters.division || payment.division === filters.division) &&
+          (!filters.company || identityPart(payment.company) === identityPart(filters.company)) &&
+          (!filters.division || identityPart(payment.division) === identityPart(filters.division)) &&
           (!filters.startDate || payment.payment_date >= filters.startDate) &&
           (!filters.endDate || payment.payment_date <= filters.endDate))
         .sort((a, b) => b.payment_date.localeCompare(a.payment_date) || Number(b.id) - Number(a.id))
@@ -372,8 +373,8 @@ const db = {
         let query = supabase.from('orders').select('*')
           .gte('order_date', period).lt('order_date', nextMonth).order('id')
           .range(offset, offset + 999);
-        if (company && company !== 'Semua') query = query.eq('company', company);
-        if (division && division !== 'Semua') query = query.eq('division', division);
+        if (company && company !== 'Semua') query = query.filter('company', 'imatch', exactIdentityPattern(company));
+        if (division && division !== 'Semua') query = query.filter('division', 'imatch', exactIdentityPattern(division));
         const { data, error } = await query;
         if (error) throw error;
         orders.push(...(data || []));
@@ -383,8 +384,8 @@ const db = {
     }
     return readLocalStore().orders.filter(order =>
       order.order_date >= period && order.order_date < nextMonth &&
-      (!company || company === 'Semua' || order.company === company) &&
-      (!division || division === 'Semua' || order.division === division));
+      (!company || company === 'Semua' || identityPart(order.company) === identityPart(company)) &&
+      (!division || division === 'Semua' || identityPart(order.division) === identityPart(division)));
   },
   async getKasbonPayments(month, year) {
     requireKasbonBackendKey();
@@ -763,8 +764,8 @@ const db = {
       try {
         let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
 
-        if (company && company !== 'Semua') query = query.eq('company', company);
-        if (division && division !== 'Semua') query = query.eq('division', division);
+        if (company && company !== 'Semua') query = query.filter('company', 'imatch', exactIdentityPattern(company));
+        if (division && division !== 'Semua') query = query.filter('division', 'imatch', exactIdentityPattern(division));
         if (location && location !== 'Semua') query = query.eq('location', location);
         if (day && day !== 'Semua') query = query.ilike('order_day', `%${day}%`);
         if (search) query = query.ilike('user_name', `%${search}%`);
@@ -814,8 +815,8 @@ const db = {
     return store.orders
       .filter((ord) => {
         if (search && !ord.user_name.toLowerCase().includes(search.toLowerCase())) return false;
-        if (company && company !== 'Semua' && ord.company.toLowerCase() !== company.toLowerCase()) return false;
-        if (division && division !== 'Semua' && ord.division.toLowerCase() !== division.toLowerCase()) return false;
+        if (company && company !== 'Semua' && identityPart(ord.company) !== identityPart(company)) return false;
+        if (division && division !== 'Semua' && identityPart(ord.division) !== identityPart(division)) return false;
         if (location && location !== 'Semua' && ord.location.toLowerCase() !== location.toLowerCase()) return false;
         if (day && day !== 'Semua' && !ord.order_day.toLowerCase().includes(day.toLowerCase())) return false;
 

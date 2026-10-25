@@ -179,3 +179,11 @@ cukup dependency backend/worker dan npm run bot:wa dengan environment Supabase y
 
 Bot tidak membutuhkan URL publik/tunnel. Jika host bot mati, otomatisasi WA berhenti,
 tetapi website/API dan input manual admin tetap dapat digunakan.
+
+## Pencocokan identitas tanpa membedakan huruf besar-kecil
+
+Nama, perusahaan dan divisi dicocokkan tanpa membedakan kapital, misalnya Hanan/hanan,
+PT Contoh/pt contoh dan HR/hr. Penulisan asli tetap ditampilkan. Filter, akumulasi harian,
+ringkasan, CSV, kasbon dan pencocokan laporan WA menggunakan aturan tersebut.
+Perusahaan/divisi/tanggal yang berbeda tetap dipisahkan. Kunci pelunasan lama tidak diubah,
+dan laporan pembayaran terpisah tidak dihapus atau digabung secara fisik.

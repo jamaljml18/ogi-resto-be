@@ -198,4 +198,11 @@ test('PostgreSQL waiting-payment transactions and concurrent operations', { time
    assert.equal(sql('SELECT count(*) FROM public.order_item_changes;'),before);
   });
 
+  await t.test('WhatsApp payment matches name, company and division with different casing',async()=>{
+   sql(create('ORD-CASE-MATCH','Hanan','9'));
+   const value={user_name:'hanan',company:'synthetic pt',division:'qa',payment_date:'2026-10-25'};
+   const result=json("SELECT public.record_payment_and_settle_waiting("+quote(JSON.stringify(value))+"::jsonb,'wa.case-match',clock_timestamp(),'WhatsApp');");
+   assert.deepEqual(result.settled_orders,['ORD-CASE-MATCH']);
+   assert.equal(sql("SELECT count(*) FROM public.waiting_payments WHERE order_number='ORD-CASE-MATCH';"),'0');
+  });
 });
