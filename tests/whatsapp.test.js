@@ -97,3 +97,24 @@ test('Database failure requests redelivery; missing configuration never accepts 
   await createWhatsappHandlers({ db: {}, env: {} }).receive(request(payload([image()])), missing);
   assert.equal(missing.code, 503);
 });
+
+
+test('Meta receipt matching uses a stable signed message timestamp across redelivery',async()=>{
+  const options=[];
+  const db={async createPaymentHistory(_record,value){options.push(value);return {id:1};}};
+  const {receive}=createWhatsappHandlers({db,env});
+  const message={...image('wa.stable-time'),timestamp:'1767225600'};
+  await receive(request(payload([message])),response());
+  await receive(request(payload([message])),response());
+  assert.equal(options[0].receivedAt,'2026-01-01T00:00:00.000Z');
+  assert.equal(options[0].receivedAt,options[1].receivedAt);
+});
+
+
+test('Waiting errors distinguish incomplete legacy schema from missing RPC and connection failures', () => {
+  const { waitingFailure } = require('../src/waitingPayments');
+  assert.match(waitingFailure({code:'42703',message:'record new has no field payment_method'}).message,/006_orders_payment_columns/);
+  assert.match(waitingFailure({code:'PGRST202'}).message,/fungsi pembayaran/);
+  assert.match(waitingFailure({code:'42501'}).message,/Akses database/);
+  assert.doesNotMatch(waitingFailure({code:'FETCH_ERROR'}).message,/migrasi/);
+});

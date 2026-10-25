@@ -20,6 +20,7 @@ function createWhatsappHandlers({ db, env = process.env }) {
   }
 
   async function receive(req, res) {
+    const receivedAt = new Date().toISOString();
     if (!env.WHATSAPP_APP_SECRET || !env.WHATSAPP_PHONE_NUMBER_ID) {
       return res.status(503).json({ error: 'Webhook WhatsApp belum dikonfigurasi.' });
     }
@@ -53,7 +54,12 @@ function createWhatsappHandlers({ db, env = process.env }) {
               counts.invalid++;
               continue;
             }
-            const payment = await db.createPaymentHistory(record, { messageId: message.id });
+            // A signed Meta message timestamp remains stable across webhook redelivery.
+            const sentAt = typeof message.timestamp === 'string' && /^\d{1,12}$/.test(message.timestamp)
+              ? Number(message.timestamp) * 1000 : NaN;
+            const stableReceivedAt = Number.isFinite(sentAt) && sentAt > 0 && sentAt <= Date.now() + 60000
+              ? new Date(sentAt).toISOString() : receivedAt;
+            const payment = await db.createPaymentHistory(record, { messageId: message.id, receivedAt: stableReceivedAt });
             if (payment) counts.saved++;
             else counts.duplicates++;
           }

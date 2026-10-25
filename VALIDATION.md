@@ -1,3 +1,56 @@
+# Validasi terbaru: edit item order dan keamanan (25 Oktober 2026)
+
+Bagian ini menggantikan kesimpulan lama yang menyebut harga checkout masih dipercaya dari
+browser, kredensial admin fallback, token URL, policy menu publik, atau build Next.js
+terblokir versi rentan. Catatan lama di bawah dipertahankan sebagai riwayat pemeriksaan.
+
+## Perubahan yang diverifikasi
+
+- Edit satu order melalui route admin dengan revision, ID menu, qty dan expectedPrice.
+- Harga/nama/subtotal/total ditentukan master backend/database; checkout juga tidak lagi
+  mempercayai harga atau total payload.
+- SQL edit mengunci order dan menu, menolak revision/harga lama, menulis audit dan total
+  secara atomik. Audit gagal membatalkan edit bersama.
+- Kasbon lunas diblokir untuk edit. Lock periode bersama dengan kasbon_payments menghitung
+  ulang nominal saat pelunasan yang bersamaan dengan edit.
+- Policy lama menus/menu_schedules dicabut melalui 007. Role anon/authenticated tidak bisa
+  mengubah menu, membaca audit, atau menjalankan fungsi edit.
+- Admin login wajib memiliki environment; tidak ada kredensial fallback atau token URL.
+- Next.js/eslint-config-next diperbarui ke 16.4.3, body-parser dan Zod mendapat patch.
+- Environment dan state bot tidak dilacak Git; pemindaian pola kredensial pada file kode/
+  dokumentasi yang dilacak tidak menemukan kandidat token Meta/service secret.
+- Seluruh empat README diperbarui: arsitektur, relasi, setup, migrasi, editor, CSV dan bot.
+
+## Hasil
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| Backend unit/endpoint | 70 lulus |
+| Frontend model/presenter | 32 lulus |
+| Bot | 19 lulus |
+| PostgreSQL terisolasi | 18 lulus |
+| Frontend lint | Lulus |
+| Build produksi Next.js 16.4.3 | Lulus di folder sementara, tanpa mengganggu .next dev |
+| Browser interaktif | HP tegak/mendatar, tablet, PC: total, save ganda, pilih order gabungan, konflik dan layout lulus |
+| npm audit frontend/backend/bot | 0 kerentanan tercatat |
+| README link/fence dan diff whitespace | Lulus |
+
+Pengujian memakai fixture lokal; tidak menjalankan migrasi di Supabase produksi,
+mengirim pesan WhatsApp, mengubah pembayaran nyata, commit, atau push.
+
+## Aktivasi dan batas
+
+Jalankan migrations/007_order_item_editing.sql setelah 001-006, lalu restart proses.
+Gunakan Node.js 22.13+ untuk memenuhi persyaratan tooling; mesin pengujian masih memiliki
+Node 22.11 yang menghasilkan peringatan engine dependency ESLint meskipun lint/build lulus.
+
+Selisih total Cash tetap perlu dicocokkan manual. Bukti WA bukan verifikasi bank/identitas.
+JSON development tidak menjamin transaksi multi-proses. Hasil tes dan audit dependency bukan
+bukti ketiadaan semua kerentanan: deployment, rate limit, backup dan kredensial tetap berada
+dalam tanggung jawab operasional.
+
+---
+
 # Validasi backend dan bot sebelum push
 
 Tanggal pemeriksaan: 17 Oktober 2026 (Asia/Jakarta).
@@ -120,3 +173,33 @@ seluruh dependensi. Pengujian ini tidak membuktikan sistem bebas race condition.
 README utama dan backend disesuaikan dengan perubahan: kegagalan cloud tidak
 lagi dianggap sukses melalui JSON; JSON tetap tersedia ketika Supabase memang
 tidak dikonfigurasi. Restart API dan worker untuk memakai kode baru.
+
+
+## Pembaruan alur waiting payments — 25 Oktober 2026
+
+Migrasi 005 menambahkan waiting_payments, status ledger privat, identitas unik,
+dan RPC atomik. Akses publik orders juga dicabut. Cash checkout memakai token
+retry khusus sehingga percobaan ulang dengan payload sama pada halaman yang
+sama mengembalikan pesanan asli. Kasbon belum memiliki idempotency key terpisah.
+
+Pengujian PostgreSQL lokal terisolasi lulus untuk satu waiting per identitas,
+race admin/WhatsApp, rollback ketika insert gagal, replay bukti, race Bayar/Hapus,
+retry checkout sebelum/sesudah paid, dan larangan akses role publik.
+Tidak ada transaksi pengujian yang dilakukan pada Supabase produksi.
+
+Pemindahan otomatis adalah pencocokan laporan, bukan verifikasi transaksi bank.
+Ketepatan nominal/bukti tetap tanggung jawab proses bisnis. Pembaruan ini tidak
+menghilangkan risiko lain seperti harga dari klien dan konflik edit dua admin.
+
+
+## 2026-10-25: legacy orders payment-column repair
+
+Supabase metadata confirmed that the deployed original orders table lacked payment_method
+and notes. This causes SQLSTATE 42703 in the Cash confirmation trigger even when the
+migration 005 functions exist. Migration 006 adds those columns and widens order_day
+without removing rows. Migration 005 also now installs these prerequisites for new runs.
+The repair has not been applied to production by this change.
+
+Validation: 59 backend tests, 27 frontend tests, frontend lint, and 11 isolated PostgreSQL
+tests passed, including missing-column reproduction, repeated repair, payment settlement,
+rollback, and concurrent pay/delete/receipt operations.

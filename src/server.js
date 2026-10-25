@@ -8,6 +8,8 @@ const db = require('./db');
 const { DAYS_OF_WEEK } = require('./seedData');
 const { periodBounds, employeeKey, summarizeKasbon } = require('./kasbon');
 const { groupOrdersByCustomerDay } = require('./orderGrouping');
+const { orderReference } = require('./waitingPayments');
+const { validateOrderEdit, priceCheckoutItems } = require('./orderEditing');
 
 const { validateManualPaymentHistory, paymentHistoryId, historyPage } = require('./paymentHistory');
 
@@ -40,9 +42,10 @@ function sanitizeForCsv(str) {
 }
 
 // Simple Stateless Token Authentication
-const ADMIN_USER = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASS = process.env.ADMIN_PASSWORD || 'admin123';
-const TOKEN_SECRET = process.env.JWT_SECRET || 'secret-catering-token';
+const ADMIN_USER = process.env.ADMIN_USERNAME || '';
+const ADMIN_PASS = process.env.ADMIN_PASSWORD || '';
+const TOKEN_SECRET = process.env.JWT_SECRET || '';
+const AUTH_CONFIGURED = Boolean(ADMIN_USER && ADMIN_PASS && TOKEN_SECRET);
 
 function generateToken(username) {
   const payload = Buffer.from(JSON.stringify({
@@ -52,7 +55,7 @@ function generateToken(username) {
   return payload + '.' + signature;
 }
 function verifyToken(token) {
-  if (typeof token !== 'string') return null;
+  if (!AUTH_CONFIGURED || typeof token !== 'string') return null;
   try {
     const parts = token.split('.');
     if (parts.length !== 2) return null;
@@ -68,7 +71,7 @@ function verifyToken(token) {
 
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : req.query.token;
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
   const user = verifyToken(token);
   if (!user) {
@@ -82,7 +85,8 @@ function requireAuth(req, res, next) {
 // 1. ENDPOINT AUTENTIKASI ADMIN
 // ==========================================
 app.post(['/api/auth/login', '/api/admin/login'], (req, res) => {
-  const { username, password } = req.body;
+  if (!AUTH_CONFIGURED) return res.status(503).json({error:'Konfigurasi autentikasi admin belum lengkap. Isi ADMIN_USERNAME, ADMIN_PASSWORD, dan JWT_SECRET pada backend.'});
+  const { username, password } = req.body || {};
   const isEnvMatch = username === ADMIN_USER && password === ADMIN_PASS;
   if (isEnvMatch) {
     const token = generateToken(username);
@@ -135,8 +139,9 @@ app.post('/api/orders', async (req, res) => {
       orderDay,
       orderDate,
       paymentMethod,
+      paymentToken,
       notes
-    } = req.body;
+    } = req.body || {};
 
     // Validasi form data diri
     if (!userName || typeof userName !== 'string' || !userName.trim()) {
@@ -155,26 +160,11 @@ app.post('/api/orders', async (req, res) => {
       return res.status(400).json({ error: 'Minimal harus memilih 1 menu makanan!' });
     }
 
-    // Validasi & re-kalkulasi item untuk mencegah manipulasi harga
-    let calculatedTotal = 0;
-    const sanitizedItems = [];
-    for (const item of items) {
-      const qty = parseInt(item.qty, 10);
-      const price = parseInt(item.price, 10);
-      if (isNaN(qty) || qty <= 0) continue;
-      const subtotal = (isNaN(price) ? 0 : price) * qty;
-      calculatedTotal += subtotal;
-      sanitizedItems.push({
-        name: sanitizeForCsv(item.name),
-        price: isNaN(price) ? 0 : price,
-        qty,
-        subtotal
-      });
-    }
-
-    if (sanitizedItems.length === 0) {
-      return res.status(400).json({ error: 'Daftar pesanan tidak valid!' });
-    }
+    // Derive both item identity and price from the backend catalog; payload prices/totals are ignored.
+    const {menus:checkoutMenus}=await db.getAllMenusWithSchedules();
+    const priced=priceCheckoutItems(items,checkoutMenus);
+    const calculatedTotal=priced.total;
+    const sanitizedItems=priced.items.map(item=>({...item,name:sanitizeForCsv(item.name)}));
 
     const newOrder = await db.createOrder({
       userName: sanitizeForCsv(userName),
@@ -186,18 +176,47 @@ app.post('/api/orders', async (req, res) => {
       orderDay: orderDay || getIndonesianDayName(),
       orderDate,
       paymentMethod: paymentMethod === 'Kasbon' ? 'Kasbon' : 'Cash',
+      paymentToken,
       notes: notes ? sanitizeForCsv(notes) : ''
     });
 
     res.status(201).json({
       success: true,
-      message: 'Pesanan berhasil dicatat!',
+      message: newOrder.payment_status === 'waiting' ? 'Pesanan menunggu pembayaran.' : 'Pesanan berhasil dicatat!',
       order: newOrder
     });
   } catch (err) {
     console.error('Error submit order:', err);
-    res.status(500).json({ error: 'Gagal menyimpan pesanan: ' + err.message });
+    res.status(err.status || 503).json({ error: err.status ? err.message : 'Gagal menyimpan pesanan. Periksa koneksi dan migrasi database.' });
   }
+});
+
+// Capability-only status polling: no customer identity or payment mutation is exposed.
+app.post('/api/orders/payment-status', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const { orderNumber, token } = req.body || {};
+    res.json(await db.getOrderPaymentStatus(orderReference(orderNumber), token));
+  } catch (error) {
+    res.status(error.status || 503).json({ error: error.status ? error.message : 'Status pembayaran belum dapat diperiksa.' });
+  }
+});
+
+app.get('/api/admin/waiting-payments', requireAuth, async (req, res) => {
+  try { res.json(await db.getWaitingPayments(historyPage(req.query.page))); }
+  catch (error) { res.status(error.status || 503).json({ error: error.message || 'Daftar menunggu pembayaran belum dapat dimuat.' }); }
+});
+app.post('/api/admin/waiting-payments/:orderNumber/pay', requireAuth, async (req, res) => {
+  try {
+    const result = await db.settleWaitingPayment(orderReference(req.params.orderNumber), 'pay', req.user.username);
+    res.json({ success: true, ...result });
+  } catch (error) { res.status(error.status || 503).json({ error: error.message || 'Pembayaran belum tersimpan.' }); }
+});
+app.delete('/api/admin/waiting-payments/:orderNumber', requireAuth, async (req, res) => {
+  try {
+    const result = await db.settleWaitingPayment(orderReference(req.params.orderNumber), 'delete', req.user.username);
+    res.json({ success: true, ...result });
+  } catch (error) { res.status(error.status || 503).json({ error: error.message || 'Pesanan belum dihapus.' }); }
 });
 
 // ==========================================
@@ -305,6 +324,19 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
     console.error('Error get orders:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Read and replace one completed order. Authentication and actor come from the server session.
+app.get('/api/admin/orders/:orderNumber/edit', requireAuth, async (req,res) => {
+  try { res.setHeader('Cache-Control','no-store'); res.json(await db.getOrderForEditing(req.params.orderNumber)); }
+  catch(error) { res.status(error.status || 503).json({error:error.status ? error.message : 'Pesanan belum dapat dimuat.'}); }
+});
+app.put('/api/admin/orders/:orderNumber/items', requireAuth, async (req,res) => {
+  try {
+    const body=validateOrderEdit(req.body);
+    const order=await db.editOrderItems(req.params.orderNumber,body,req.user.username);
+    res.json({success:true,order});
+  } catch(error) { res.status(error.status || 503).json({error:error.status ? error.message : 'Perubahan pesanan belum dapat dikonfirmasi.'}); }
 });
 
 // Ekspor Riwayat Pesanan ke CSV (Terproteksi & Anti-CSV Injection)

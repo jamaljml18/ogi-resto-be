@@ -1,300 +1,190 @@
 # Ogi Resto Backend
 
-REST API Express untuk katalog catering, pesanan, administrasi menu, rekap kasbon,
-dan riwayat pembayaran. Database utama menggunakan Supabase PostgreSQL.
-Worker bot grup disediakan terpisah di [whatsapp-bot](whatsapp-bot/README.md).
+Express API untuk menu, checkout, waiting pembayaran, riwayat, kasbon, CSV, dan edit
+item order. Supabase PostgreSQL menjadi penyimpanan utama. Browser tidak mengakses
+tabel langsung; backend memakai service_role atau secret key.
 
-## Rekening pembayaran
+## Instalasi
 
-Informasi pembayaran yang ditampilkan kepada pelanggan:
+Gunakan Node.js 22.13+ dan npm. Salin .env.example ke .env, isi konfigurasi, lalu:
 
-```text
-0690595664
-BCA
-A/n: Ogi Nur Saputra
-```
+~~~powershell
+npm.cmd ci
+npm.cmd start
+~~~
 
-Informasi rekening ditampilkan oleh frontend. Label UI non-Kasbon sekarang
-**Cash / Transfer**, sedangkan nilai `payment_method` tetap `Cash` atau `Kasbon`.
-Tidak ada kolom bank baru, verifikasi mutasi, webhook bank, atau perubahan schema
-yang diperlukan untuk perubahan tampilan ini.
+| Environment | Fungsi |
+| --- | --- |
+| PORT | Port, default 5000 |
+| SUPABASE_URL | URL proyek Supabase |
+| SUPABASE_KEY | service_role/secret key; bukan anon/publishable |
+| ADMIN_USERNAME | Username admin |
+| ADMIN_PASSWORD | Password admin |
+| JWT_SECRET | Rahasia token; gunakan nilai acak panjang |
+| WA_GROUP_BOT_ENABLED | Aktivasi worker grup |
+| WA_GROUP_BOT_ALLOWED_GROUPS | ID grup yang diizinkan |
+| WA_GROUP_BOT_SESSION_KEY | Kunci hex 64 karakter sesi/antrean bot |
+| WHATSAPP_VERIFY_TOKEN | Token verifikasi webhook Meta opsional |
+| WHATSAPP_APP_SECRET | Pemeriksaan signature Meta |
+| WHATSAPP_PHONE_NUMBER_ID | ID nomor penerima Cloud API |
+| WHATSAPP_ACCESS_TOKEN | Konfigurasi Meta; bukan sesi Baileys/token admin |
 
-Riwayat pembayaran manual/WhatsApp tetap hanya menyimpan laporan identitas dan
-tanggal. Admin mencocokkan transfer ke rekening di atas sebelum mengonfirmasi
-pelunasan kasbon. Membuka informasi rekening tidak menandakan transaksi berhasil.
+Ketiga variabel admin wajib; login tanpa konfigurasi gagal tertutup. Tidak ada kredensial
+fallback. Token HMAC berlaku 24 jam dan diterima melalui header Bearer, bukan query URL.
+Jangan menyimpan rahasia pada frontend, README, log publik atau Git.
 
 ## Struktur
 
 | Lokasi | Tanggung jawab |
 | --- | --- |
-| `src/server.js` | Routing HTTP, autentikasi, validasi request, dan CSV |
-| `src/db.js` | Akses tabel Supabase dan penyimpanan JSON development |
-| `src/kasbon.js` | Periode, identitas karyawan, dan agregasi Cash/Kasbon |
-| `src/paymentHistory.js` | Validasi manual, parser /bayar, tanggal WIB, dan ID/pagination |
-| `src/whatsappWebhook.js` | Challenge Meta dan verifikasi signature webhook |
-| `src/seedData.js` | Data menu awal dan daftar hari |
-| `schema.sql` | Skema lengkap dan seed instalasi baru |
-| `migrations/` | Perubahan untuk database yang sudah ada |
-| `tests/` | Pengujian backend |
-| `whatsapp-bot/` | Worker Baileys dengan package dan dependensi sendiri |
+| src/server.js | Route, autentikasi, validasi HTTP dan CSV |
+| src/db.js | Akses Supabase/RPC dan JSON development |
+| src/orderEditing.js | Validasi item/revision, harga server, error edit |
+| src/waitingPayments.js | Identitas pending, token hash, pemindahan lokal |
+| src/paymentHistory.js | Caption, tanggal WIB dan filter riwayat |
+| src/whatsappWebhook.js | Verifikasi/penerimaan Cloud API |
+| src/kasbon.js | Identitas karyawan, periode dan ringkasan |
+| src/orderGrouping.js | Gabungan per pemesan/tanggal |
+| schema.sql | Instalasi baru lengkap dengan seed |
+| migrations | Peningkatan struktur bertahap |
+| whatsapp-bot | Worker terpisah; [panduan](whatsapp-bot/README.md) |
+| tests | Unit, endpoint dan PostgreSQL terisolasi |
 
-## Menjalankan
+Supabase yang sudah dikonfigurasi tetapi gagal tidak dialihkan menjadi sukses JSON lokal.
+JSON hanya untuk development tanpa konfigurasi cloud dan tidak mendukung multi-proses.
 
-Dari folder backend, gunakan Node.js 22 atau lebih baru bila menjalankan bot:
+## Database dan migrasi
 
-```powershell
-npm.cmd ci
-# Hanya pada instalasi baru, jangan menimpa konfigurasi yang sudah diisi:
-Copy-Item .env.example .env
-npm.cmd run dev
-```
+Instalasi baru menjalankan schema.sql. Database lama menjalankan migrasi yang belum
+diterapkan secara berurutan. Jangan mengeksekusi ulang seed produksi untuk memperbarui kolom.
 
-Isi environment sebelum menjalankan server. HTTP default di port 5000.
-`npm.cmd start` dan `npm.cmd run dev` sama-sama menjalankan `node src/server.js`;
-belum memakai file watcher. Restart proses setelah perubahan kode atau env.
-
-| Variabel | Keterangan |
+| Migrasi | Isi |
 | --- | --- |
-| `PORT` | Default 5000 |
-| `SUPABASE_URL` | Project URL Supabase |
-| `SUPABASE_KEY` | service_role atau secret key; hanya untuk proses backend/bot |
-| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Kredensial login admin |
-| `JWT_SECRET` | Kunci signature token internal; gunakan nilai privat |
-| `WHATSAPP_VERIFY_TOKEN` | Nilai buatan sendiri untuk verifikasi callback Meta |
-| `WHATSAPP_APP_SECRET` | Secret aplikasi Meta untuk HMAC raw body |
-| `WHATSAPP_PHONE_NUMBER_ID` | ID nomor Cloud API, bukan nomor telepon/WABA ID |
-| `WHATSAPP_ACCESS_TOKEN` | Graph API tambahan; handler webhook masuk tidak memakainya |
-| `WA_GROUP_BOT_ENABLED` | `true` untuk menjalankan pencatatan bot |
-| `WA_GROUP_BOT_ALLOWED_GROUPS` | ID grup dipisahkan koma |
-| `WA_GROUP_BOT_SESSION_KEY` | Kunci hex 64 karakter untuk enkripsi state bot |
+| [001](migrations/001_kasbon_payments.sql) | Kasbon bulanan |
+| [002](migrations/002_history_payments.sql) | Riwayat pembayaran |
+| [003](migrations/003_history_payments_whatsapp.sql) | ID pesan unik |
+| [004](migrations/004_history_payments_management.sql) | Soft delete/metadata |
+| [005](migrations/005_waiting_payments.sql) | Waiting, ledger privat, RPC settlement |
+| [006](migrations/006_orders_payment_columns.sql) | Kolom orders lama |
+| [007](migrations/007_order_item_editing.sql) | Revision, audit, edit item, lock kasbon, hardening menu |
 
-Lihat [.env.example](.env.example) untuk template. Nilai contoh bukan kredensial
-produksi. Jangan mengunggah `.env`, kode penautan, QR, atau direktori sesi bot.
+Migrasi tidak dijalankan oleh npm start. Fitur Edit terbaru memerlukan 007 setelah 001-006.
 
-## Komunikasi frontend, backend, dan database
-
-```mermaid
-sequenceDiagram
-  participant F as Model frontend
-  participant A as Express API
-  participant M as src/db.js
-  participant D as Supabase PostgreSQL
-  F->>A: HTTP request JSON + Bearer untuk admin
-  A->>A: Autentikasi dan validasi
-  A->>M: Panggil fungsi database
-  M->>D: Supabase JS melalui HTTPS
-  D-->>M: Data / error
-  M-->>A: Hasil / exception
-  A-->>F: HTTP status + JSON atau CSV
-```
-
-Frontend memakai `fetch`; key Supabase tidak dikirim ke browser. Supabase JS
-mengakses API tabel Supabase, bukan koneksi SQL langsung dari browser.
-Frontend menampilkan keberhasilan perubahan pembayaran setelah backend
-mengonfirmasi penyimpanan. Daftar pembayaran diperbarui lewat HTTP, bukan Realtime.
-
-Login menghasilkan token internal HMAC-SHA256 dengan kedaluwarsa 24 jam.
-Formatnya dua bagian, bukan JWT standar, meskipun environment bernama
-`JWT_SECRET`. Backend memverifikasi signature, role, username, dan expiry.
-Frontend menyimpan token di localStorage dan memakai header Bearer.
-Identitas admin berasal dari environment, bukan tabel users atau Supabase Auth.
+FK: menu_schedules.menu_id -> menus.id; order_item_changes.order_id -> orders.id;
+order_payment_status.order_id -> orders.id dan history_payment_id -> history_payments.id.
+items JSONB adalah snapshot, bukan FK master menu. Waiting/status memakai order_number
+secara logis; kasbon memakai employee_key dan period_month yang unik.
 
 ## Endpoint
 
-Semua path berikut relatif terhadap host backend. Endpoint bertanda admin
-memerlukan token Bearer.
+Prefix /api. Seluruh route /admin memerlukan Authorization: Bearer.
 
-| Metode | Path | Akses | Hasil / fungsi |
-| --- | --- | --- | --- |
-| GET | `/api/health` | Publik | Status HTTP API |
-| GET | `/api/days` | Publik | Daftar hari dan nama hari saat server memproses |
-| GET | `/api/menu?day=Senin` | Publik | Menu aktif pada hari pilihan |
-| POST | `/api/orders` | Publik | Membuat pesanan |
-| POST | `/api/auth/login` | Publik | Login admin |
-| POST | `/api/admin/login` | Publik | Alias login |
-| GET | `/api/admin/session` | Admin | Validasi sesi |
-| GET / POST | `/api/admin/menus` | Admin | Daftar master / tambah menu |
-| PUT / DELETE | `/api/admin/menus/:id` | Admin | Ubah / hapus menu |
-| PUT | `/api/admin/schedules` | Admin | Simpan matriks jadwal menu |
-| GET | `/api/admin/orders` | Admin | Riwayat pesanan dan summary |
-| GET | `/api/admin/orders/export-csv` | Admin | Unduh rekap pesanan |
-| GET | `/api/admin/kasbon` | Admin | Rekap periode terpilih |
-| PUT | `/api/admin/kasbon/payments` | Admin | Konfirmasi / batalkan pelunasan periode |
-| GET | `/api/admin/kasbon/export-csv` | Admin | Matriks kasbon bulanan |
-| GET | `/api/admin/history-payments?page=1` | Admin | Riwayat pembayaran, 50 baris per halaman |
-| POST | `/api/admin/history-payments` | Admin | Tambah pembayaran manual |
-| PUT / DELETE | `/api/admin/history-payments/:id` | Admin | Edit / soft delete pembayaran |
-| GET / POST | `/api/webhooks/whatsapp` | Verifikasi Meta | Challenge / pesan masuk Cloud API |
-
-Untuk jadwal, frontend memakai `/api/admin/schedules`.
-Alias `/api/admin/menus/schedules` juga tersedia. Route jadwal didaftarkan
-sebelum route menu dinamis agar tidak ditangkap sebagai ID menu.
-
-Filter pesanan: `search`, `company`, `division`, `location`, `date`, `day`,
-`startDate`, `endDate`, `month`, dan `year`.
-Rekap kasbon memakai `month`, `year`, serta filter perusahaan/divisi.
-
-Contoh body pembayaran manual:
-
-```json
-{
-  "user_name": "Budi Santoso",
-  "company": "PT Contoh",
-  "division": "Produksi",
-  "payment_date": "2026-10-17"
-}
-```
-
-POST/PUT manual memerlukan tanggal valid. Jalur WhatsApp menentukan tanggal
-sendiri dalam Asia/Jakarta. GET pembayaran menghasilkan
-`{ payments, hasMore, page }`, diurutkan tanggal terbaru lalu ID terbesar.
-DELETE menyembunyikan data melalui `deleted_at`, bukan menghapus ID pesan.
-
-## Skema dan relasi
-
-Gunakan [schema.sql](schema.sql) untuk instalasi baru. Pada database lama,
-terapkan [migrasi](migrations/) yang belum diterapkan sesuai urutan 001, 002,
-003, lalu 004. Skema lengkap juga berisi seed menu; eksekusi ulang dapat
-memperbarui menu seed yang sudah ada.
-
-| Tabel | Peran | Hubungan |
+| Method | Route | Fungsi |
 | --- | --- | --- |
-| `menus` | Master menu | PK id string, contoh `m-1` |
-| `menu_schedules` | Ketersediaan menu per hari | FK menu_id ke menus.id, ON DELETE CASCADE; unik menu_id/day_name |
-| `orders` | Snapshot pesanan | Items JSONB; tidak ada FK menu atau tabel order_items |
-| `kasbon_payments` | Konfirmasi pelunasan bulanan | Unik employee_key/period_month; hubungan logis ke orders |
-| `history_payments` | Laporan pembayaran manual/WhatsApp | Tidak ada FK ke orders atau kasbon_payments |
+| POST | /auth/login atau /admin/login | Login |
+| GET | /admin/session | Validasi sesi |
+| GET | /days, /menu | Hari dan menu pelanggan |
+| POST | /orders | Checkout dengan harga master |
+| POST | /orders/payment-status | Nomor + token privat dalam body |
+| GET | /admin/menus | Katalog/jadwal admin |
+| POST/PUT/DELETE | /admin/menus dan turunannya | Kelola master dan jadwal |
+| GET | /admin/orders | Order, ringkasan, groupedOrders |
+| GET | /admin/orders/export-csv | CSV sesuai filter/mode |
+| GET | /admin/orders/:orderNumber/edit | Snapshot dan katalog editor |
+| PUT | /admin/orders/:orderNumber/items | Ganti item |
+| GET | /admin/waiting-payments | Waiting, 50 baris/halaman |
+| POST | /admin/waiting-payments/:orderNumber/pay | Konfirmasi waiting |
+| DELETE | /admin/waiting-payments/:orderNumber | Batalkan waiting |
+| GET/POST | /admin/history-payments | Daftar/tambah riwayat |
+| PUT/DELETE | /admin/history-payments/:id | Koreksi/soft delete |
+| GET | /admin/kasbon | Rekap bulanan |
+| PUT | /admin/kasbon/payments | Status lunas |
+| GET | /admin/kasbon/export-csv | CSV kasbon |
+| GET/POST | /webhooks/whatsapp | Verifikasi/pesan Cloud API opsional |
 
-`employee_key` adalah SHA-256 dari JSON array nama, perusahaan, dan divisi yang
-di-trim serta dibuat huruf kecil. Rekap menjumlahkan pesanan bulan terpilih per
-key dan membaca status dari `kasbon_payments`. Cash tetap bisa ditampilkan dalam
-matriks, tetapi tidak menambah total utang Kasbon.
+## Harga dan edit pesanan
 
-`period_month` adalah tanggal pertama bulan tagihan; `paid_at` waktu konfirmasi.
-Status pembayaran dapat dibatalkan untuk koreksi. Belum ada master pegawai,
-sehingga perubahan ejaan nama/perusahaan/divisi memerlukan rekonsiliasi.
+Checkout menggunakan katalog backend. ID diprioritaskan; nama lama hanya diterima jika
+cocok dengan satu menu aktif. Payload nama/harga/total tidak menjadi sumber harga.
+Jumlah 1-999, maksimum 50 menu berbeda, total maksimal INTEGER.
 
-`history_payments` menyimpan identitas, payment_date, created_at,
-whatsapp_message_id, updated_at, updated_by, dan deleted_at.
-ID pesan WhatsApp unik. Edit tidak mengganti ID pesan; soft delete mempertahankannya.
-Catatan manual memiliki ID pesan kosong. Sumber Manual/WhatsApp ditentukan dari
-ada tidaknya ID pesan, bukan kolom source tersendiri.
+Contoh body PUT /admin/orders/ORD-.../items:
 
-Riwayat pembayaran tidak memiliki nominal atau referensi bank dan tidak otomatis
-melunasi kasbon. Admin tetap perlu memverifikasi transfer dan mengubah status
-pelunasan secara terpisah. Metadata edit adalah perubahan terakhir, bukan log semua versi.
+~~~json
+{
+  "revision": 1,
+  "items": [
+    { "id": "m-1", "qty": 2, "expectedPrice": 5000 }
+  ]
+}
+~~~
 
-## Perilaku penyimpanan dan batas saat ini
+expectedPrice hanya mendeteksi perubahan harga. Database menggunakan nama/harga master.
+Semua item edit memakai harga terkini. Identitas, lokasi, jadwal, metode bayar, nomor
+pesanan dan catatan tidak diterima sebagai perubahan; actor berasal dari sesi admin.
 
-- Saat Supabase belum diisi, API dapat memakai `data/store.json` untuk development.
-- Saat Supabase dikonfigurasi, kegagalan query atau inisialisasi dikembalikan
-  sebagai error. Tidak ada fallback diam-diam ke dataset lokal atau sinkronisasi
-  otomatis antara JSON dan Supabase.
-- Bot grup mewajibkan konfigurasi Supabase dan memeriksa akses riwayat saat startup.
-- `kasbon_payments` dan `history_payments` memakai RLS serta mencabut akses
-  anon/authenticated; backend menggunakan service_role/secret key.
-- Policy awal `menus`, `menu_schedules`, dan `orders` masih permisif pada schema.sql.
-  Pembatasan token Express tidak otomatis membatasi akses langsung ke API database.
-- Token admin belum memiliki tabel sesi atau mekanisme pencabutan per token.
-- CORS saat ini terbuka melalui `cors()`.
-- Total pesanan dihitung ulang dari harga item payload; belum diverifikasi terhadap
-  harga master menu di database.
-- Ekspor CSV menambahkan penanganan awalan formula. Jangan menganggap implementasi
-  CSV atau validasi ini sebagai audit keamanan menyeluruh.
+edit_order_items melakukan satu transaksi:
+1. Validasi item, jumlah, duplikasi, actor dan revision.
+2. Lock identitas/periode dan row order.
+3. Tolak revision lama atau kasbon lunas.
+4. Lock menu dalam urutan ID stabil, periksa harga pembanding.
+5. Hitung subtotal/total dan tulis order_item_changes.
+6. Update order; trigger menaikkan revision dan updated_at.
+7. Commit bersama. Audit/update yang gagal membatalkan seluruh perubahan.
 
-## Dua integrasi WhatsApp
+409 untuk revision/harga berubah atau kasbon lunas; 422 menu tidak tersedia;
+400 payload salah; 503 migrasi/koneksi belum tersedia. Reload setelah konflik.
+Retry revision lama tidak membuat edit kedua.
 
-### Worker Baileys untuk grup
+Audit menyimpan item/total sebelum/sesudah, order, admin, dan waktu.
+Perubahan Cash tidak melakukan penagihan/refund otomatis; admin mencocokkan selisih.
 
-Worker membaca grup yang diizinkan melalui perangkat tertaut. Hanya foto biasa
-bercaption `/bayar` empat baris dari anggota selain bot yang diproses.
-Worker mengimpor `src/db.js` langsung: tidak memerlukan token admin, tidak
-memanggil HTTP API Express, dan tidak memerlukan Cloudflare Tunnel.
+## Settlement dan kasbon
 
-Antrean serta sesi dienkripsi AES-256-GCM dalam `whatsapp-bot/.state/runtime.enc`.
-Setelah antrean ditulis ke disk, worker mencoba insert. Retry database setiap
-5 detik; unique ID pesan mencegah catatan ganda. Tanggal mengikuti waktu terima
-WIB yang disimpan di antrean, bukan tanggal retry.
+Cash masuk waiting; Kasbon langsung orders. Tombol Bayar dan riwayat cocok menggunakan
+RPC atomik untuk memindahkan waiting. Ledger hash/status tetap ada setelah waiting dihapus.
+ID pesan unik dan waktu awal antrean melindungi retry yang sudah diterima bot dari
+pemindahan order berikutnya. Soft delete mempertahankan ID pesan.
 
-Instal dependensi bot secara terpisah:
+Migrasi 007 memberi lock periode bersama pada edit dan trigger kasbon_payments.
+Trigger menghitung ulang kasbon_amount dari orders di bawah lock saat konfirmasi.
+Kasbon lunas harus dibuka kembali sebelum item order dapat diedit.
+Laporan /bayar tidak memeriksa mutasi bank atau melunasi kasbon bulanan otomatis.
 
-```powershell
-npm.cmd --prefix whatsapp-bot ci
-npm.cmd run bot:check
-npm.cmd run bot:code
-# Pilih ID grup pada .env, aktifkan bot, lalu:
-npm.cmd run bot:wa
-```
+## Filter dan CSV
 
-Panduan [bot](whatsapp-bot/README.md) menjelaskan QR, kode penautan, perpindahan
-nomor, logout, dan pemulihan. Worker harus berjalan terus pada host yang mendukung
-proses panjang; jangan mengandalkan lifecycle request serverless untuk bot.
+Daftar/CSV pesanan menggunakan getOrders dengan parameter sama:
+search, company, division, location, day, date, startDate, endDate, month, year.
+groupBy=customer_day mengekspor ringkasan identitas + tanggal; default detail.
+Tanggal menggunakan order_date. Rentang diutamakan daripada tanggal tunggal.
+Bulan membutuhkan tahun; UI menyelaraskan pilihan tersebut.
 
-### Webhook Meta untuk Cloud API
+Kasbon list/CSV menggunakan getKasbonOrders(month,year,company,division).
+Waiting tidak termasuk CSV orders. CSV memakai BOM UTF-8, pemisah titik koma,
+escaping tanda kutip dan proteksi formula spreadsheet. Riwayat pembayaran belum punya CSV.
 
-GET callback memvalidasi token yang dibuat sendiri. POST memvalidasi
-`X-Hub-Signature-256` terhadap raw body, lalu menyaring phone number ID.
-Foto + caption yang valid disimpan lewat fungsi pembayaran yang sama.
-Tidak ada pengunduhan foto atau balasan. Kegagalan database menghasilkan 503
-agar webhook dapat dicoba ulang; ID pesan unik menangani pengiriman ulang.
+## Keamanan dan operasi
 
-Konfigurasikan HTTPS callback `https://DOMAIN_BACKEND/api/webhooks/whatsapp`
-dan subscription `messages` pada Meta. Jalur ini terpisah dari Baileys;
-implementasi webhook ini tidak menyediakan pembacaan grup WhatsApp biasa.
+- Tabel/RPC privat hanya untuk service_role/secret key.
+- Setelah 007, policy publik master menu/jadwal lama dihapus.
+- SECURITY DEFINER memakai search_path kosong, hak eksekusi publik dicabut.
+- Token admin pada header; token pelanggan pada body POST/hash database. Editor/status no-store.
+- Session/queue bot berada di proses terpisah dan terenkripsi.
+- Rate limit/kontrol akses lapisan hosting, backup dan rotasi kredensial perlu dikelola.
+- JSON lokal bukan pengganti transaksi PostgreSQL produksi.
+- Pengujian dan audit dependency bukan jaminan tidak ada kerentanan lain.
 
 ## Pengujian
 
-```powershell
+~~~powershell
 npm.cmd test
 npm.cmd run test:bot
-npm.cmd run bot:check
-```
+npm.cmd run test:waiting:postgres
+npm.cmd audit
+~~~
 
-Tes bot tidak menautkan akun, mengirim pesan ke orang lain, atau menulis transaksi
-sungguhan. Health check hanya menunjukkan proses HTTP aktif, bukan jaminan koneksi
-database atau worker bot sehat. Detail prosedur ada di README bot.
-
-## Validasi konkurensi dan batas keamanan
-
-Lihat [VALIDATION.md](VALIDATION.md) untuk temuan yang sudah diperbaiki, pengujian
-dan risiko yang masih terbuka. Hasil tes bukan jaminan bebas race condition.
-
-
-## Parameter filter riwayat pembayaran
-
-GET /api/admin/history-payments menerima page, search, company, division, date,
-startDate, endDate, month, dan year. Contoh:
-
-```text
-/api/admin/history-payments?page=1&search=Budi&company=PT%20Contoh&division=HR&startDate=2026-10-01&endDate=2026-10-31
-```
-
-search mencari sebagian nama dan memperlakukan karakter wildcard sebagai teks
-literal. company/division memakai pencocokan nilai lengkap. date adalah satu
-tanggal; startDate/endDate rentang inklusif; month/year dapat dipakai sebagai
-alternatif periode bulan, termasuk perhitungan Februari tahun kabisat.
-Tanggal/periode yang tidak valid ditolak HTTP 400. Filter tanggal tunggal, rentang,
-dan bulan tidak boleh dicampur dalam satu permintaan.
-
-Filter diterapkan di Supabase maupun JSON development sebelum pengurutan dan
-pagination. Catatan soft delete tetap dikecualikan. Tanggal acuan adalah
-history_payments.payment_date. Perubahan ini tidak memerlukan migrasi database.
-
-
-## Ringkasan pesanan untuk tabel dan CSV
-
-GET /api/admin/orders tetap mengembalikan orders dan summary dari pesanan asli,
-ditambah groupedOrders hasil src/orderGrouping.js. Pengelompokan memakai identitas
-employeeKey (nama, perusahaan, divisi yang dinormalisasi) dan tanggal pengantaran.
-Pengelompokan berlangsung setelah filter; tanggal atau identitas berbeda tidak
-digabung.
-
-GET /api/admin/orders/export-csv?groupBy=customer_day mengekspor ringkasan yang sama.
-Tanpa groupBy, CSV tetap per pesanan seperti sebelumnya. Mode lain ditolak 400.
-CSV ringkas memuat seluruh nomor order, jumlah order, menu yang dijumlahkan,
-lokasi/catatan gabungan, serta nominal Cash/Transfer dan Kasbon terpisah.
-Teks CSV meng-escape tanda kutip, termasuk pada catatan.
-
-Tidak ada perubahan tabel atau migrasi SQL. Pengelompokan dilakukan di memori
-dari hasil query yang tersedia dan tidak menyimpan ulang pesanan. Jumlah transaksi,
-omset, dan rata-rata di dashboard tetap menggunakan pesanan asli.
+Tes PostgreSQL membuat cluster sementara sendiri, bukan Supabase produksi.
+Default bin: C:/Program Files/PostgreSQL/17/bin; override melalui OGI_POSTGRES_BIN.
+Cakupan: harga palsu, auth, filter CSV, konflik edit, audit/rollback, harga berubah,
+konfirmasi bersama, paid kasbon, race edit/pelunasan, serta akses anon/authenticated.
+Lihat [VALIDATION.md](VALIDATION.md) untuk hasil verifikasi.

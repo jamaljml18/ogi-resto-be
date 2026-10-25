@@ -3,8 +3,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { INITIAL_MENUS, DAYS_OF_WEEK } = require('./seedData');
+const { validateOrderEdit, priceEditedItems, editFailure } = require('./orderEditing');
 const { periodBounds, employeeKey, paymentMethod } = require('./kasbon');
 const { validatePaymentHistory, validateManualPaymentHistory, paymentHistoryId, paymentHistoryFilters } = require('./paymentHistory');
+const { waitingIdentity, problem, tokenHash, orderReference, waitingFailure, settleLocal, settleMatchingLocal } = require('./waitingPayments');
 
 const rawSupabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseUrl = rawSupabaseUrl.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
@@ -134,6 +136,106 @@ function writeLocalStore(data) {
 
 // API DATABASE INTERFACE
 const db = {
+  async getOrderForEditing(number) {
+    orderReference(number); requireKasbonBackendKey();
+    if (isSupabaseConfigured && !supabase) throw editFailure();
+    let order, menus;
+    if (supabase) {
+      const [row,catalog] = await Promise.all([
+        supabase.from('orders').select('*').eq('order_number',number).maybeSingle(),
+        supabase.from('menus').select('id,name,price,category,is_active').order('id')
+      ]);
+      if (row.error || catalog.error) throw editFailure(row.error || catalog.error);
+      order=row.data;menus=catalog.data || [];
+      if (order && !Number.isSafeInteger(Number(order.revision))) throw editFailure({code:'42703'});
+    } else {
+      const store=readLocalStore(); order=store.orders.find(row=>row.order_number===number);menus=store.menus;
+      if (order) order={...order,revision:order.revision || 1};
+    }
+    if (!order) throw problem(404,'Pesanan tidak ditemukan.');
+    return {order,menus:menus.filter(menu=>menu.is_active!==false)};
+  },
+  async editOrderItems(number,body,admin) {
+    orderReference(number); requireKasbonBackendKey();
+    const {revision,items}=validateOrderEdit(body);
+    if (isSupabaseConfigured && !supabase) throw editFailure();
+    if (supabase) {
+      const {data,error}=await supabase.rpc('edit_order_items',{p_order_number:number,p_expected_revision:revision,p_items:items,p_actor:admin});
+      if (error) throw editFailure(error);
+      if (!data) throw editFailure(); return data;
+    }
+    const store=readLocalStore(),order=store.orders.find(row=>row.order_number===number);
+    if (!order) throw problem(404,'Pesanan tidak ditemukan.');
+    if ((order.revision || 1)!==revision) throw editFailure({message:'ORDER_EDIT_CONFLICT'});
+    if (paymentMethod(order)==='Kasbon' && (store.kasbon_payments || []).some(row=>
+      row.employee_key===employeeKey(order) && row.period_month===order.order_date.slice(0,7)+'-01' && row.is_paid)) {
+      throw editFailure({message:'ORDER_KASBON_ALREADY_PAID'});
+    }
+    const priced=priceEditedItems(items,store.menus);
+    store.order_item_changes=store.order_item_changes || [];
+    store.order_item_changes.push({order_id:order.id,order_number:number,before_items:order.items,after_items:priced.items,
+      before_total:order.total_price,after_total:priced.total,edited_by:admin,edited_at:new Date().toISOString()});
+    Object.assign(order,{items:priced.items,total_price:priced.total,revision:revision+1,updated_at:new Date().toISOString(),updated_by:admin});
+    writeLocalStore(store);return order;
+  },
+  async getWaitingPayments(page = 1) {
+    requireKasbonBackendKey();
+    if (isSupabaseConfigured && !supabase) throw waitingFailure();
+    const offset = (page - 1) * 50;
+    let rows;
+    if (supabase) {
+      const { data, error } = await supabase.from('waiting_payments')
+        .select('id,order_number,user_name,company,division,location,items,total_price,order_day,order_date,payment_method,notes,created_at')
+        .order('created_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + 50);
+      if (error) throw waitingFailure(error);
+      rows = data || [];
+    } else {
+      rows = [...(readLocalStore().waiting_payments || [])]
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || Number(b.id) - Number(a.id)).slice(offset, offset + 51);
+    }
+    return { payments: rows.slice(0, 50), hasMore: rows.length > 50, page };
+  },
+
+  async settleWaitingPayment(number, action, actor) {
+    orderReference(number);
+    if (!['pay', 'delete'].includes(action)) throw problem(400, 'Aksi pembayaran tidak valid.');
+    requireKasbonBackendKey();
+    if (isSupabaseConfigured && !supabase) throw waitingFailure();
+    if (supabase) {
+      const { data, error } = await supabase.rpc('settle_waiting_order', {
+        p_order_number: number, p_action: action, p_admin: actor
+      });
+      if (error) throw waitingFailure(error);
+      if (!data) throw waitingFailure();
+      return data;
+    }
+    const store = readLocalStore();
+    const result = settleLocal(store, number, action, actor);
+    writeLocalStore(store);
+    return result;
+  },
+
+  async getOrderPaymentStatus(number, token) {
+    orderReference(number);
+    const hash = tokenHash(token);
+    requireKasbonBackendKey();
+    if (isSupabaseConfigured && !supabase) throw waitingFailure();
+    let row;
+    if (supabase) {
+      const { data, error } = await supabase.from('order_payment_status')
+        .select('status,updated_at').eq('order_number', number).eq('status_token_hash', hash).maybeSingle();
+      if (error) throw waitingFailure(error);
+      row = data;
+    } else {
+      row = (readLocalStore().order_payment_status || [])
+        .find(value => value.order_number === number && value.status_token_hash === hash);
+    }
+    if (!row) throw problem(404, 'Status pesanan tidak ditemukan.');
+    if (!['waiting', 'paid', 'deleted'].includes(row.status)) throw waitingFailure();
+    return { order_number: number, status: row.status, updated_at: row.updated_at };
+  },
+
+
   async getPaymentHistory(page = 1, rawFilters = {}) {
     requireKasbonBackendKey();
     if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
@@ -188,11 +290,11 @@ const db = {
     }
     if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
     if (supabase) {
-      const table = supabase.from('history_payments');
-      const { data, error } = messageId
-        ? await table.upsert(record, { onConflict: 'whatsapp_message_id', ignoreDuplicates: true }).select().maybeSingle()
-        : await table.insert(record).select().single();
-      if (error) throw error;
+      const { data, error } = await supabase.rpc('record_payment_and_settle_waiting', {
+        p_record: record, p_message_id: messageId || null,
+        p_received_at: receivedDate.toISOString(), p_actor: manual ? admin || 'admin' : 'WhatsApp'
+      });
+      if (error) throw waitingFailure(error);
       return data;
     }
     const store = readLocalStore();
@@ -202,8 +304,9 @@ const db = {
       id: store.history_payments.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1,
       created_at: new Date().toISOString() };
     store.history_payments.push(payment);
+    const settled = settleMatchingLocal(store, record, payment.id, receivedDate.toISOString(), manual ? admin || 'admin' : 'WhatsApp');
     writeLocalStore(store);
-    return payment;
+    return { ...payment, settled_orders: settled };
   },
 
 
@@ -584,6 +687,45 @@ const db = {
       notes: notes,
       created_at: new Date().toISOString()
     };
+
+    if (paymentMethod === 'Cash') {
+      requireKasbonBackendKey();
+      const statusToken = orderPayload.paymentToken || crypto.randomBytes(32).toString('hex');
+      const statusHash = tokenHash(statusToken);
+      let waiting;
+      if (supabase) {
+        const { data, error } = await supabase.rpc('create_waiting_order', {
+          p_order: order, p_token_hash: statusHash
+        });
+        if (error) throw waitingFailure(error);
+        if (!data) throw waitingFailure();
+        waiting = data;
+      } else {
+        const store = readLocalStore();
+        store.waiting_payments = store.waiting_payments || [];
+        store.order_payment_status = store.order_payment_status || [];
+        const previous = store.order_payment_status.find(value => value.status_token_hash === statusHash);
+        if (previous) {
+          const found = (previous.status === 'paid' ? store.orders : store.waiting_payments)
+            .find(value => value.order_number === previous.order_number);
+          if (previous.status === 'deleted' || !found || waitingIdentity(found) !== waitingIdentity(order)) {
+            throw problem(409, 'Pesanan sebelumnya sudah diproses. Muat ulang halaman.');
+          }
+          return { ...found, payment_status: previous.status,
+            ...(previous.status === 'waiting' ? { payment_status_token: statusToken } : {}) };
+        }
+        if (store.waiting_payments.some(value => waitingIdentity(value) === waitingIdentity(order))) {
+          throw problem(409, 'Masih ada pesanan menunggu untuk nama, perusahaan, dan divisi ini. Selesaikan pesanan tersebut terlebih dahulu.');
+        }
+        waiting = { ...order, id: store.waiting_payments.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1 };
+        store.waiting_payments.push(waiting);
+        store.order_payment_status.push({ order_number: order.order_number, status_token_hash: statusHash,
+          status: 'waiting', created_at: order.created_at, updated_at: order.created_at });
+        writeLocalStore(store);
+      }
+      return { ...waiting, payment_status: waiting.payment_status || 'waiting',
+        ...((waiting.payment_status || 'waiting') === 'waiting' ? { payment_status_token: statusToken } : {}) };
+    }
 
     if (supabase) {
       try {

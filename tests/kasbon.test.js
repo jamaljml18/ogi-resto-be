@@ -40,6 +40,8 @@ function loadDb(cloud, key = 'synthetic', clock = Date) {
       name==='./seedData' ? {INITIAL_MENUS:[],DAYS_OF_WEEK:[]} :
       name==='./whatsappWebhook' ? require('../src/whatsappWebhook') :
       name==='./paymentHistory' ? require('../src/paymentHistory') :
+      name==='./waitingPayments' ? require('../src/waitingPayments') :
+      name==='./orderEditing' ? require('../src/orderEditing') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../src/db.js'),'utf8'),context);
   return {db:context.module.exports,getStore:()=>store,writes:()=>writes};
@@ -106,31 +108,48 @@ test('Supabase upsert uses employee/month uniqueness and Kasbon-only amount',asy
   assert.equal(captured.options.onConflict,'employee_key,period_month');
   assert.equal(writes(),0);
 });
-function loadServer(mockOrders = orders) {
+function loadServer(mockOrders = orders, envOverrides = {}) {
   const routes=[];
   const app={use(){},listen(){throw Error('Unexpected server startup');}};
   for(const method of ['get','post','put','delete']) app[method]=(paths,...handlers)=>{
     for(const endpoint of [paths].flat())routes.push({method,endpoint,handlers});};
   const express=()=>app;express.json=()=>()=>{};
-  const env={VERCEL:'1',ADMIN_USERNAME:'test-admin',ADMIN_PASSWORD:'test-password',JWT_SECRET:'test-signing-secret'};
+  const env={VERCEL:'1',ADMIN_USERNAME:'test-admin',ADMIN_PASSWORD:'test-password',JWT_SECRET:'test-signing-secret',...envOverrides};
   let saves=0;
   const historyCalls=[];
+  const checkoutCalls=[];
+  const editCalls=[];
+  const waitingCalls=[];
+  const orderQueries=[],kasbonQueries=[];
   const context={module:{exports:{}},process:{env},Buffer,Date,__dirname:path.resolve(__dirname,'../src'),
     console:{log(){},error(){}},require:name=>name==='express' ? express : name==='cors' ? ()=>()=>{} :
       name==='dotenv' ? {config(){}} : name==='./db' ? {
-        getOrders:async()=>mockOrders,
+        getAllMenusWithSchedules:async()=>({menus:[{id:'m-checkout',name:'Menu checkout',price:7000,is_active:true}],schedules:{}}),
+        createOrder:async body=>{checkoutCalls.push(body);return {order_number:'ORD-CHECKOUT',total_price:body.totalPrice};},
+        getOrderForEditing:async number=>({order:{order_number:number,revision:1},menus:[]}),
+        editOrderItems:async(number,body,admin)=>{editCalls.push({number,body,admin});return {order_number:number,revision:2,total_price:4000};},
+        getOrders:async filters=>{orderQueries.push(filters);return mockOrders;},
+        getWaitingPayments:async page=>{waitingCalls.push({list:page});return {payments:[],hasMore:false,page};},
+        settleWaitingPayment:async(number,action,actor)=>{waitingCalls.push({number,action,actor});return {status:action==='pay'?'paid':'deleted',order_number:number};},
+        getOrderPaymentStatus:async(number,token)=>{
+          require('../src/waitingPayments').tokenHash(token);
+          waitingCalls.push({status:number});return {order_number:number,status:'waiting'};
+        },
+
         createPaymentHistory:async(input,options)=>{historyCalls.push({input,options});return {id:'9',...input}},
         updatePaymentHistory:async(id,input,admin)=>{historyCalls.push({id,input,admin});return {id,...input}},
         deletePaymentHistory:async(id,admin)=>{historyCalls.push({id,admin});return {id}},
-        getKasbonOrders:async()=>orders,getKasbonPayments:async()=>[],
+        getKasbonOrders:async filters=>{kasbonQueries.push(filters);return orders;},getKasbonPayments:async()=>[],
         setKasbonPayment:async input=>{saves++;return {is_paid:input.isPaid};}
       } : name==='./seedData' ? {DAYS_OF_WEEK:[]} :
       name==='./orderGrouping' ? require('../src/orderGrouping') :
       name==='./whatsappWebhook' ? require('../src/whatsappWebhook') :
       name==='./paymentHistory' ? require('../src/paymentHistory') :
+      name==='./waitingPayments' ? require('../src/waitingPayments') :
+      name==='./orderEditing' ? require('../src/orderEditing') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../src/server.js'),'utf8'),context);
-  return {routes,context,historyCalls,saves:()=>saves};
+  return {routes,context,historyCalls,waitingCalls,orderQueries,kasbonQueries,editCalls,checkoutCalls,saves:()=>saves};
 }
 function response(){return {code:200,headers:{},status(code){this.code=code;return this},
   json(data){this.data=data;return this},send(data){this.data=data;return this},
@@ -223,7 +242,7 @@ test('History local storage persists independently, sorts latest first and pagin
   assert.equal(getStore().orders.length,3);
 });
 test('History cloud failures never save locally and public keys are rejected',async()=>{
-  const cloud={from(){throw Error('Synthetic cloud outage');}};
+  const cloud={from(){throw Error('Synthetic cloud outage');},rpc(){throw Error('Synthetic cloud outage');}};
   const {db,writes}=loadDb(cloud);
   await assert.rejects(()=>db.createPaymentHistory(historyInput),/Synthetic cloud outage/);
   await assert.rejects(()=>db.getPaymentHistory(),/Synthetic cloud outage/);
@@ -234,9 +253,11 @@ test('History cloud failures never save locally and public keys are rejected',as
 });
 test('History uses the requested Supabase table and inserts only validated fields',async()=>{
   let inserted;
-  const chain={insert(value){inserted=value;return this},select(){return this},
-    single:async()=>({data:{id:1,...inserted},error:null})};
-  const {db,writes}=loadDb({from(table){assert.equal(table,'history_payments');return chain;}});
+  const {db,writes}=loadDb({rpc(name, args){
+    assert.equal(name,'record_payment_and_settle_waiting');
+    inserted=args.p_record;
+    return Promise.resolve({data:{id:1,...inserted},error:null});
+  }});
   const result=await db.createPaymentHistory({...historyInput,id:999,unwanted:'discard'});
   assert.equal(result.id,1);assert.equal(result.user_name,'Budi');
   assert.equal(inserted.unwanted,undefined);assert.equal(inserted.id,undefined);assert.equal(writes(),0);
@@ -263,17 +284,19 @@ test('WhatsApp redelivery deduplicates persisted local history without changing 
   assert.equal(getStore().history_payments[0].user_name,'Budi');
   assert.equal(getStore().history_payments[0].payment_date,first.payment_date);
 });
-test('WhatsApp cloud inserts use a unique message key and preserve existing rows on redelivery',async()=>{
+test('WhatsApp cloud receipts use the atomic RPC with a unique message key',async()=>{
   let captured,seen=false;
-  const chain={upsert(record,options){captured={record,options};return this},select(){return this},
-    async maybeSingle(){if(seen)return {data:null,error:null};seen=true;return {data:captured.record,error:null}}};
-  const {db,writes}=loadDb({from(table){assert.equal(table,'history_payments');return chain}});
-  const first=await db.createPaymentHistory(historyInput,{messageId:'wamid.cloud'});
-  const duplicate=await db.createPaymentHistory(historyInput,{messageId:'wamid.cloud'});
-  assert.equal(first.whatsapp_message_id,'wamid.cloud');assert.equal(duplicate,null);
-  assert.equal(captured.options.onConflict,'whatsapp_message_id');
-  assert.equal(captured.options.ignoreDuplicates,true);assert.equal(writes(),0);
+  const {db,writes}=loadDb({async rpc(name,args){
+    assert.equal(name,'record_payment_and_settle_waiting');captured=args;
+    if(seen)return {data:null,error:null};seen=true;return {data:args.p_record,error:null};
+  }});
+  await db.createPaymentHistory(historyInput,{messageId:'wamid.cloud'});
+  assert.equal(await db.createPaymentHistory(historyInput,{messageId:'wamid.cloud'}),null);
+  assert.equal(captured.p_message_id,'wamid.cloud');
+  assert.equal(captured.p_record.whatsapp_message_id,'wamid.cloud');
+  assert.equal(captured.p_actor,'WhatsApp');assert.equal(writes(),0);
 });
+
 test('WhatsApp verification and receiving endpoints are registered',()=>{
   const {routes}=loadServer();
   for(const method of ['get','post']) {
@@ -396,7 +419,7 @@ test('Configured cloud outages never silently read or write a different local da
     db => db.deleteMenu('m-1'),
     db => db.updateSchedules({ 'm-1': { Senin: true } }),
     db => db.createOrder({ userName: 'Synthetic', company: 'PT Test', division: 'QA',
-      location: 'Office', items: [], totalPrice: 0 }),
+      location: 'Office', items: [], totalPrice: 0, paymentMethod: 'Kasbon' }),
     db => db.getOrders({})
   ];
   for (const operation of operations) {
@@ -600,4 +623,208 @@ test('Grouped CSV exports one row per customer/day, complete references, and sep
   const invalid = response();
   await route.handlers[1]({ query: { groupBy: 'unsupported' } }, invalid);
   assert.equal(invalid.code, 400);
+});
+
+const waitingPayload = { userName:'Budi', company:'PT A', division:'HR', location:'Office',
+  items:[{name:'Oseng tahu',price:3000,qty:1,subtotal:3000}], totalPrice:3000,
+  orderDay:'Hari Ini', orderDate:'2026-10-25', paymentMethod:'Cash', notes:'sayap' };
+
+test('Cash checkout stays in waiting while Kasbon directly joins orders; token is hashed at rest',async()=>{
+  const {db,getStore}=loadDb();
+  const original=getStore().orders.length;
+  const waiting=await db.createOrder(waitingPayload);
+  assert.equal(getStore().orders.length,original);
+  assert.equal(getStore().waiting_payments.length,1);
+  assert.equal(waiting.payment_status,'waiting');
+  assert.match(waiting.payment_status_token,/^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(getStore()).includes(waiting.payment_status_token));
+  assert.equal((await db.getOrderPaymentStatus(waiting.order_number,waiting.payment_status_token)).status,'waiting');
+  await assert.rejects(()=>db.getOrderPaymentStatus(waiting.order_number,'0'.repeat(64)),e=>e.status===404);
+  await assert.rejects(()=>db.createOrder({...waitingPayload,userName:' BUDI '}),e=>e.status===409);
+  await db.createOrder({...waitingPayload,paymentMethod:'Kasbon'});
+  assert.equal(getStore().orders.length,original+1);
+  assert.equal((await db.getWaitingPayments()).payments.length,1);
+});
+
+test('Receipt atomically records history and moves the unique matching waiting order',async()=>{
+  const {db,getStore}=loadDb(), original=getStore().orders.length;
+  const order=await db.createOrder(waitingPayload);
+  const receipt=await db.createPaymentHistory(historyInput,{messageId:'wa.waiting-one',receivedAt:new Date(Date.now()+1000).toISOString()});
+  assert.equal(receipt.settled_orders[0],order.order_number);
+  assert.equal(getStore().history_payments.length,1);
+  assert.equal(getStore().waiting_payments.length,0);
+  assert.equal(getStore().orders.length,original+1);
+  const stored=getStore().orders.find(row=>row.order_number===order.order_number);
+  assert.equal(stored.notes,'sayap'); assert.equal(stored.total_price,3000);
+  assert.equal((await db.getOrderPaymentStatus(order.order_number,order.payment_status_token)).status,'paid');
+  const next=await db.createOrder(waitingPayload);
+  assert.equal(await db.createPaymentHistory(historyInput,{messageId:'wa.waiting-one'}),null);
+  assert.equal((await db.getOrderPaymentStatus(next.order_number,next.payment_status_token)).status,'waiting');
+});
+
+test('Old queued receipt or another division never pays a newer waiting order',async()=>{
+  const {db}=loadDb();
+  const order=await db.createOrder(waitingPayload);
+  await db.createPaymentHistory(historyInput,{messageId:'wa.too-old',receivedAt:'2000-01-01T00:00:00Z'});
+  await db.createPaymentHistory({...historyInput,division:'Other'},{messageId:'wa.other'});
+  assert.equal((await db.getOrderPaymentStatus(order.order_number,order.payment_status_token)).status,'waiting');
+});
+
+test('Admin pay/delete are idempotent, mutually exclusive and never leak capabilities in the list',async()=>{
+  const {db,getStore}=loadDb(), count=getStore().orders.length;
+  const order=await db.createOrder(waitingPayload);
+  const listed=await db.getWaitingPayments();
+  assert.ok(!JSON.stringify(listed).includes(order.payment_status_token));
+  assert.ok(!JSON.stringify(listed).includes('status_token_hash'));
+  const results=await Promise.allSettled([
+    db.settleWaitingPayment(order.order_number,'pay','admin'),
+    db.settleWaitingPayment(order.order_number,'delete','admin')
+  ]);
+  assert.equal(results.filter(row=>row.status==='fulfilled').length,1);
+  assert.equal(getStore().orders.length,count+1);
+  await db.settleWaitingPayment(order.order_number,'pay','admin');
+  assert.equal(getStore().orders.length,count+1);
+  const cancelled=await db.createOrder({...waitingPayload,userName:'Cancel'});
+  await db.settleWaitingPayment(cancelled.order_number,'delete','admin');
+  await db.settleWaitingPayment(cancelled.order_number,'delete','admin');
+  assert.equal((await db.getOrderPaymentStatus(cancelled.order_number,cancelled.payment_status_token)).status,'deleted');
+  assert.equal(getStore().orders.length,count+1);
+});
+
+test('Cash cloud checkout uses one RPC and exposes only the capability, not its hash',async()=>{
+  let captured;
+  const {db,writes}=loadDb({async rpc(name,args){
+    assert.equal(name,'create_waiting_order');captured=args;return {data:{id:1,...args.p_order},error:null};
+  }});
+  const result=await db.createOrder(waitingPayload);
+  assert.equal(captured.p_token_hash,crypto.createHash('sha256').update(result.payment_status_token).digest('hex'));
+  assert.equal(result.status_token_hash,undefined);assert.equal(writes(),0);
+  const failed=loadDb({async rpc(){return {error:{code:'23505'}};}});
+  await assert.rejects(()=>failed.db.createOrder(waitingPayload),e=>e.status===409);
+  assert.equal(failed.writes(),0);
+});
+
+
+test('Waiting identity tolerates repeated whitespace and checkout retries reuse the original order',async()=>{
+  const {db,getStore}=loadDb(), paymentToken='e'.repeat(64);
+  const first=await db.createOrder({...waitingPayload,userName:'Budi  Santoso',paymentToken});
+  const retry=await db.createOrder({...waitingPayload,userName:' budi santoso ',paymentToken});
+  assert.equal(retry.order_number,first.order_number);assert.equal(getStore().waiting_payments.length,1);
+  await db.createPaymentHistory({...historyInput,user_name:'Budi Santoso'},{messageId:'wa.whitespace',
+    receivedAt:new Date(Date.now()+1000).toISOString()});
+  assert.equal((await db.getOrderPaymentStatus(first.order_number,paymentToken)).status,'paid');
+  const confirmed=await db.createOrder({...waitingPayload,userName:'Budi Santoso',paymentToken});
+  assert.equal(confirmed.order_number,first.order_number);assert.equal(confirmed.payment_status,'paid');
+});
+
+
+test('Waiting admin endpoints require authentication and bind confirmation to the authenticated operator',async()=>{
+  const {routes,waitingCalls}=loadServer();
+  for(const [method,endpoint] of [
+    ['get','/api/admin/waiting-payments'],
+    ['post','/api/admin/waiting-payments/:orderNumber/pay'],
+    ['delete','/api/admin/waiting-payments/:orderNumber']
+  ]) {
+    const route=routes.find(value=>value.method===method&&value.endpoint===endpoint);
+    const denied=response();
+    route.handlers[0]({headers:{},query:{}},denied,()=>assert.fail('Anonymous waiting mutation'));
+    assert.equal(denied.code,401);
+    const accepted=response();
+    await route.handlers[1]({query:{page:'1'},params:{orderNumber:'ORD-SYNTHETIC'},user:{username:'operator'}},accepted);
+    assert.equal(accepted.code,200);
+  }
+  assert.equal(waitingCalls[1].action,'pay');assert.equal(waitingCalls[1].actor,'operator');
+  assert.equal(waitingCalls[2].action,'delete');
+});
+
+test('Public status accepts only the private capability and cannot mark an order as paid',async()=>{
+  const {routes,waitingCalls}=loadServer();
+  const route=routes.find(value=>value.endpoint==='/api/orders/payment-status');
+  const denied=response();
+  await route.handlers[0]({body:{orderNumber:'ORD-SYNTHETIC',token:'bad'}},denied);
+  assert.equal(denied.code,400);
+  const accepted=response();
+  await route.handlers[0]({body:{orderNumber:'ORD-SYNTHETIC',token:'a'.repeat(64),status:'paid'}},accepted);
+  assert.equal(accepted.code,200);assert.equal(accepted.data.status,'waiting');
+  assert.equal(accepted.headers['Cache-Control'],'no-store');
+  assert.ok(!JSON.stringify(accepted.data).includes('token'));
+  assert.ok(waitingCalls.every(call=>call.action===undefined));
+});
+
+
+test('Order list and CSV use identical active filters, including grouped export', async()=>{
+  const {routes,orderQueries}=loadServer();
+  const list=routes.find(r=>r.endpoint==='/api/admin/orders');
+  const csv=routes.find(r=>r.endpoint==='/api/admin/orders/export-csv');
+  for(const date of [{date:'2026-10-25'},{startDate:'2026-10-01',endDate:'2026-10-25'},{month:'10',year:'2026'}]){
+    const filters={search:'Budi',company:'PT A & B',division:'HR',location:'Lantai 2',day:'Minggu',...date};
+    const page=response(),file=response();
+    await list.handlers[1]({query:filters},page);
+    await csv.handlers[1]({query:{...filters,groupBy:'customer_day'}},file);
+    assert.equal(page.code,200);assert.equal(file.code,200);
+    const normalized=orderQueries.slice(-2).map(value=>JSON.parse(JSON.stringify(value)));
+    assert.deepEqual(normalized,[filters,filters]);
+  }
+});
+
+test('Kasbon list and CSV use identical period, company and division filters', async()=>{
+  const {routes,kasbonQueries}=loadServer();
+  const list=routes.find(r=>r.endpoint==='/api/admin/kasbon');
+  const csv=routes.find(r=>r.endpoint==='/api/admin/kasbon/export-csv');
+  const filters={month:'10',year:'2026',company:'PT A & B',division:'HR'};
+  const page=response(),file=response();
+  await list.handlers[1]({query:filters},page);
+  await csv.handlers[1]({query:filters},file);
+  assert.equal(page.code,200);assert.equal(file.code,200);
+  assert.deepEqual(kasbonQueries.slice(-2).map(value=>JSON.parse(JSON.stringify(value))),[filters,filters]);
+});
+
+test('Order editing endpoints require admin auth and ignore supplied actor and totals',async()=>{
+ const {routes,editCalls}=loadServer();
+ for(const endpoint of ['/api/admin/orders/:orderNumber/edit','/api/admin/orders/:orderNumber/items']){
+  const route=routes.find(r=>r.endpoint===endpoint),denied=response();
+  route.handlers[0]({headers:{}},denied,()=>assert.fail('Anonymous edit'));assert.equal(denied.code,401);
+ }
+ const route=routes.find(r=>r.endpoint==='/api/admin/orders/:orderNumber/items');
+ const bad=response();await route.handlers[1]({params:{orderNumber:'ORD-EDIT'},body:{revision:1,items:[]},user:{username:'test-admin'}},bad);
+ assert.equal(bad.code,400);assert.equal(editCalls.length,0);
+ const ok=response();await route.handlers[1]({params:{orderNumber:'ORD-EDIT'},user:{username:'test-admin'},body:{revision:1,actor:'attacker',total_price:1,items:[{id:'m-1',qty:2,expectedPrice:5000,price:1}]}},ok);
+ assert.equal(ok.code,200);assert.equal(editCalls[0].admin,'test-admin');
+ assert.deepEqual(JSON.parse(JSON.stringify(editCalls[0].body)),{revision:1,items:[{id:'m-1',qty:2,expectedPrice:5000}]});
+});
+test('Local edit reprices from master, records audit and rejects stale or paid changes',async()=>{
+ const {db,getStore,writes}=loadDb(),store=getStore();
+ store.orders=[{...base,id:5,order_number:'ORD-LOCAL-EDIT',items:[{name:'Old',qty:1,price:3000}],total_price:3000,payment_method:'Kasbon'}];
+ store.menus=[{id:'m-new',name:'New menu',price:7000,is_active:true}];
+ const body={revision:1,items:[{id:'m-new',qty:2,expectedPrice:7000}]};
+ const data=await db.editOrderItems('ORD-LOCAL-EDIT',body,'admin');
+ assert.equal(data.total_price,14000);assert.equal(data.revision,2);assert.equal(writes(),1);
+ assert.equal(getStore().order_item_changes[0].before_total,3000);
+ await assert.rejects(()=>db.editOrderItems('ORD-LOCAL-EDIT',body,'other'),e=>e.status===409);
+ await assert.rejects(()=>db.editOrderItems('ORD-LOCAL-EDIT',{revision:2,items:[{id:'m-new',qty:2,expectedPrice:1}]},'admin'),e=>e.status===409);
+ getStore().kasbon_payments=[{employee_key:employeeKey(base),period_month:'2026-01-01',is_paid:true}];
+ await assert.rejects(()=>db.editOrderItems('ORD-LOCAL-EDIT',{...body,revision:2},'admin'),e=>e.status===409&&e.message.includes('lunas'));
+ assert.equal(writes(),1);
+});
+test('Cloud edit sends validated menu intent to an atomic RPC and fails closed',async()=>{
+ let args;const {db,writes}=loadDb({async rpc(name,body){args={name,body};return {data:{order_number:'ORD-CLOUD',total_price:10000}};}});
+ await db.editOrderItems('ORD-CLOUD',{revision:4,items:[{id:'m-1',qty:2,expectedPrice:5000}],total_price:1},'admin');
+ assert.equal(args.name,'edit_order_items');assert.equal(args.body.p_expected_revision,4);assert.equal(args.body.p_actor,'admin');assert.equal(writes(),0);
+ const failed=loadDb({async rpc(){return {error:{code:'PGRST202'}};}});
+ await assert.rejects(()=>failed.db.editOrderItems('ORD-CLOUD',{revision:1,items:[{id:'m-1',qty:1,expectedPrice:5000}]},'admin'),e=>e.status===503&&e.message.includes('007'));
+ assert.equal(failed.writes(),0);
+});
+
+test('Public checkout derives correct prices from the catalog and preserves menu IDs',async()=>{
+ const {routes,checkoutCalls}=loadServer(),route=routes.find(r=>r.endpoint==='/api/orders'&&r.method==='post');
+ const res=response();await route.handlers[0]({body:{userName:'Budi',company:'PT A',division:'HR',location:'Office',paymentMethod:'Cash',totalPrice:1,items:[{id:'m-checkout',name:'Spoof',price:1,qty:2}]}},res);
+ assert.equal(res.code,201);assert.equal(checkoutCalls[0].totalPrice,14000);assert.equal(checkoutCalls[0].items[0].id,'m-checkout');assert.equal(checkoutCalls[0].items[0].name,'Menu checkout');
+});
+test('Admin login fails closed without configuration and query-string tokens cannot authenticate',async()=>{
+ const missing=loadServer(orders,{ADMIN_PASSWORD:'',JWT_SECRET:''});
+ const login=missing.routes.find(r=>r.endpoint==='/api/auth/login'),res=response();
+ login.handlers[0]({body:{username:'admin',password:'admin123'}},res);assert.equal(res.code,503);
+ const normal=loadServer(),token=vm.runInContext('generateToken',normal.context)('test-admin');
+ const route=normal.routes.find(r=>r.endpoint==='/api/admin/orders'),denied=response();
+ route.handlers[0]({headers:{},query:{token}},denied,()=>assert.fail('URL token authentication'));assert.equal(denied.code,401);
 });
