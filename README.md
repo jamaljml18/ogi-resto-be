@@ -188,3 +188,19 @@ Default bin: C:/Program Files/PostgreSQL/17/bin; override melalui OGI_POSTGRES_B
 Cakupan: harga palsu, auth, filter CSV, konflik edit, audit/rollback, harga berubah,
 konfirmasi bersama, paid kasbon, race edit/pelunasan, serta akses anon/authenticated.
 Lihat [VALIDATION.md](VALIDATION.md) untuk hasil verifikasi.
+
+## Deployment Vercel dan stateless
+
+vercel.json backend yang ada menggunakan src/server.js sebagai Express Function.
+Ketika VERCEL aktif, modul mengekspor app tanpa app.listen. Deploy sebagai proyek terpisah
+dari frontend, dengan environment Supabase dan ADMIN_USERNAME/ADMIN_PASSWORD/JWT_SECRET.
+
+Data bisnis berada di Supabase dan session admin memakai token bertanda tangan, sehingga API
+tidak memerlukan state lokal antar-request. Fallback JSON development sekarang ditolak di
+Vercel. vercelignore mengecualikan environment, data lokal, worker dan fixture dari upload.
+
+Periksa /api/health setelah deploy. Frontend statis memakai URL backend publik absolut
+yang ditentukan sebelum build. Worker Baileys bukan bagian dari Function dan tidak perlu
+dijalankan pada instance API; host di proses terus hidup dengan disk persisten.
+
+Lihat [panduan deployment frontend/API/bot](../frontend/DEPLOYMENT.md).

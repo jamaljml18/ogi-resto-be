@@ -166,3 +166,16 @@ npm.cmd audit
 
 Tes memakai pesan sintetis dan cluster PostgreSQL sementara, bukan pembayaran nyata.
 Lihat [backend](../README.md) dan [panduan proyek](../../README.md).
+
+## Jika frontend/API sudah di hosting
+
+Frontend dapat berupa out statis di Netlify/Vercel; API HTTP dapat berada di Vercel dengan
+Supabase. Worker ini tetap berjalan terpisah pada komputer/VPS/worker host yang terus hidup.
+
+Worker memerlukan koneksi berkelanjutan, folder .state persisten, kunci sesi tetap, dan satu
+proses untuk state tersebut. Jangan menjalankan bot melalui Vercel Functions, request API,
+atau build frontend. Jika API sudah di Vercel, host bot tidak perlu menjalankan npm start:
+cukup dependency backend/worker dan npm run bot:wa dengan environment Supabase yang sama.
+
+Bot tidak membutuhkan URL publik/tunnel. Jika host bot mati, otomatisasi WA berhenti,
+tetapi website/API dan input manual admin tetap dapat digunakan.

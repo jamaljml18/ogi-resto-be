@@ -29,12 +29,12 @@ test('Legacy item metadata is respected for Kasbon',()=>{
   const [row]=summarizeKasbon([{...base,total_price:12000,items:[{_meta:true,payment_method:'Kasbon'}]}]);
   assert.equal(row.totalKasbon,12000);
 });
-function loadDb(cloud, key = 'synthetic', clock = Date) {
+function loadDb(cloud, key = 'synthetic', clock = Date, envOverrides = {}) {
   let store={orders:[...orders,{...orders[0],order_date:'2026-02-01'}],menus:[],schedules:{}};
   let writes=0;
   const fakeFs={existsSync:()=>true,readFileSync:()=>JSON.stringify(store),
     writeFileSync:(_,data)=>{store=JSON.parse(data);writes++;}};
-  const context={Buffer,Date:clock,module:{exports:{}},process:{env:cloud ? {SUPABASE_URL:'https://example.supabase.co',SUPABASE_KEY:key} : {}},
+  const context={Buffer,Date:clock,module:{exports:{}},process:{env:{...(cloud ? {SUPABASE_URL:'https://example.supabase.co',SUPABASE_KEY:key} : {}),...envOverrides}},
     __dirname:path.resolve(__dirname,'../src'),console:{log(){},warn(){},error(){}},
     require:name=>name==='fs' ? fakeFs : name==='@supabase/supabase-js' ? {createClient:()=>{if(cloud?.initError) throw Error('Synthetic initialization failure');return cloud}} :
       name==='./seedData' ? {INITIAL_MENUS:[],DAYS_OF_WEEK:[]} :
@@ -827,4 +827,10 @@ test('Admin login fails closed without configuration and query-string tokens can
  const normal=loadServer(),token=vm.runInContext('generateToken',normal.context)('test-admin');
  const route=normal.routes.find(r=>r.endpoint==='/api/admin/orders'),denied=response();
  route.handlers[0]({headers:{},query:{token}},denied,()=>assert.fail('URL token authentication'));assert.equal(denied.code,401);
+});
+
+test('Vercel refuses filesystem fallback when Supabase configuration is missing',async()=>{
+ const {db,writes}=loadDb(undefined,'synthetic',Date,{VERCEL:'1'});
+ await assert.rejects(()=>db.getOrders({}),e=>e.status===503&&e.message.includes('Vercel'));
+ assert.equal(writes(),0);
 });

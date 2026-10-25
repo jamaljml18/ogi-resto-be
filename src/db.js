@@ -29,7 +29,7 @@ if (isSupabaseConfigured) {
     console.error('[Database] Gagal menginisialisasi Supabase client:', err.message);
   }
 } else {
-  console.log('[Database] Supabase belum dikonfigurasi. Menggunakan Local JSON Storage (Otomatis beralih ke Supabase saat .env diisi).');
+  console.log(process.env.VERCEL ? '[Database] Supabase wajib dikonfigurasi di Vercel. Penyimpanan JSON lokal dinonaktifkan.' : '[Database] Supabase belum dikonfigurasi. Menggunakan JSON development.');
 }
 
 // Identify a public key without logging or exposing its value.
@@ -90,6 +90,7 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
 
 function ensureLocalStore() {
+  if (process.env.VERCEL) throw problem(503,'Supabase wajib dikonfigurasi di Vercel. Penyimpanan JSON lokal tidak tersedia pada serverless.');
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
