@@ -454,7 +454,7 @@ app.put('/api/admin/kasbon/payments', requireAuth, async (req, res) => {
 // Riwayat pembayaran manual (admin).
 app.get('/api/admin/history-payments', requireAuth, async (req, res) => {
   try {
-    res.json(await db.getPaymentHistory(historyPage(req.query.page)));
+    res.json(await db.getPaymentHistory(historyPage(req.query.page), req.query));
   } catch (error) {
     console.error('Payment history failed:', error.message);
     res.status(error.status || 503).json({ error: error.status ? error.message :

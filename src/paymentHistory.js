@@ -60,4 +60,41 @@ function paymentHistoryId(value) {
   return value;
 }
 
-module.exports = { validatePaymentHistory, validateManualPaymentHistory, paymentHistoryId, historyPage, jakartaDate, parseBayarCaption };
+
+function paymentHistoryFilters(query = {}) {
+  const filters = {};
+  const text = field => {
+    if (query[field] === undefined || query[field] === '') return '';
+    if (typeof query[field] !== 'string' || query[field].length > 255) invalid('Filter ' + field + ' tidak valid.');
+    return query[field].trim();
+  };
+  for (const field of ['search', 'company', 'division']) {
+    const value = text(field);
+    if (value && value !== 'Semua') filters[field] = value;
+  }
+  const date = text('date'), startDate = text('startDate'), endDate = text('endDate');
+  const month = text('month'), year = text('year');
+  const validDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '0001-01-01' &&
+    Number.isFinite(Date.parse(value + 'T00:00:00Z')) &&
+    new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+  for (const value of [date, startDate, endDate]) {
+    if (value && !validDate(value)) invalid('Tanggal filter tidak valid.');
+  }
+  if (date && (startDate || endDate || month || year)) invalid('Pilih satu jenis filter tanggal.');
+  if ((month || year) && (startDate || endDate)) invalid('Pilih satu jenis filter periode.');
+  if (month || year) {
+    if (!/^(0?[1-9]|1[0-2])$/.test(month) || !/^[1-9]\d{3}$/.test(year)) invalid('Bulan dan tahun filter tidak valid.');
+    const days = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+    filters.startDate = year + '-' + month.padStart(2, '0') + '-01';
+    filters.endDate = year + '-' + month.padStart(2, '0') + '-' + days;
+  } else {
+    if (date || startDate) filters.startDate = date || startDate;
+    if (date || endDate) filters.endDate = date || endDate;
+  }
+  if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
+    invalid('Tanggal awal tidak boleh melebihi tanggal akhir.');
+  }
+  return filters;
+}
+
+module.exports = { paymentHistoryFilters, validatePaymentHistory, validateManualPaymentHistory, paymentHistoryId, historyPage, jakartaDate, parseBayarCaption };

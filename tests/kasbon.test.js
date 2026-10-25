@@ -440,3 +440,58 @@ test('Schedule aliases are registered before the dynamic menu update route', () 
   assert.ok(index('/api/admin/menus/schedules') < index('/api/admin/menus/:id'));
   assert.ok(index('/api/admin/schedules') < index('/api/admin/menus/:id'));
 });
+
+const { paymentHistoryFilters } = require('../src/paymentHistory');
+
+test('History filters validate dates, leap months, boundaries and malformed inputs', () => {
+  assert.deepEqual(paymentHistoryFilters({ search: ' Budi ', company: 'PT A', division: 'HR', date: '2026-10-24' }),
+    { search: 'Budi', company: 'PT A', division: 'HR', startDate: '2026-10-24', endDate: '2026-10-24' });
+  assert.deepEqual(paymentHistoryFilters({ month: '2', year: '2024' }),
+    { startDate: '2024-02-01', endDate: '2024-02-29' });
+  assert.deepEqual(paymentHistoryFilters({ month: '12', year: '2026' }),
+    { startDate: '2026-12-01', endDate: '2026-12-31' });
+  for (const query of [
+    { date: '2026-02-30' }, { date: ['2026-10-24'] }, { search: {} },
+    { company: 'x'.repeat(256) }, { month: '13', year: '2026' }, { year: '2026' },
+    { startDate: '2026-10-25', endDate: '2026-10-24' },
+    { date: '2026-10-24', startDate: '2026-10-01' },
+    { month: '10', year: '2026', endDate: '2026-10-24' }
+  ]) assert.throws(() => paymentHistoryFilters(query), error => error.status === 400);
+});
+
+test('History applies combined filters before pagination and excludes soft-deleted payments', async () => {
+  const { db, getStore } = loadDb();
+  const rows = Array.from({ length: 60 }, (_, index) => ({ id: index + 1, user_name: 'Budi Santoso',
+    company: 'PT A', division: 'HR', payment_date: '2026-10-24' }));
+  getStore().history_payments = [
+    ...rows,
+    { ...rows[0], id: 100, company: 'PT B' },
+    { ...rows[0], id: 101, division: 'IT' },
+    { ...rows[0], id: 102, user_name: 'Other' },
+    { ...rows[0], id: 103, payment_date: '2026-10-25' },
+    { ...rows[0], id: 104, deleted_at: '2026-10-24T12:00:00Z' }
+  ];
+  const filters = { search: 'bUdI', company: 'PT A', division: 'HR', date: '2026-10-24' };
+  const first = await db.getPaymentHistory(1, filters), second = await db.getPaymentHistory(2, filters);
+  assert.equal(first.payments.length, 50); assert.equal(first.hasMore, true);
+  assert.equal(second.payments.length, 10); assert.equal(second.hasMore, false);
+  assert.equal(first.payments[0].id, 60); assert.equal(second.payments.at(-1).id, 1);
+  const none = await db.getPaymentHistory(1, { company: 'missing' });
+  assert.equal(none.payments.length, 0);
+});
+
+test('Cloud history filters precede range and escape literal search wildcards', async () => {
+  const calls = [];
+  const chain = {};
+  for (const method of ['select', 'is', 'ilike', 'eq', 'gte', 'lte', 'order']) {
+    chain[method] = (...args) => { calls.push([method, ...args]); return chain; };
+  }
+  chain.range = async (...args) => { calls.push(['range', ...args]); return { data: [], error: null }; };
+  const { db, writes } = loadDb({ from(table) { assert.equal(table, 'history_payments'); return chain; } });
+  await db.getPaymentHistory(2, { search: '50%_off', company: 'PT A', division: 'HR', month: '2', year: '2024' });
+  assert.ok(calls.some(call => call[0] === 'ilike' && call[1] === 'user_name' && call[2] === '%50\\%\\_off%'));
+  assert.ok(calls.some(call => call[0] === 'gte' && call[2] === '2024-02-01'));
+  assert.ok(calls.some(call => call[0] === 'lte' && call[2] === '2024-02-29'));
+  assert.deepEqual(calls.at(-1), ['range', 50, 100]);
+  assert.equal(writes(), 0);
+});

@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { INITIAL_MENUS, DAYS_OF_WEEK } = require('./seedData');
 const { periodBounds, employeeKey, paymentMethod } = require('./kasbon');
-const { validatePaymentHistory, validateManualPaymentHistory, paymentHistoryId } = require('./paymentHistory');
+const { validatePaymentHistory, validateManualPaymentHistory, paymentHistoryId, paymentHistoryFilters } = require('./paymentHistory');
 
 const rawSupabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseUrl = rawSupabaseUrl.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
@@ -134,22 +134,34 @@ function writeLocalStore(data) {
 
 // API DATABASE INTERFACE
 const db = {
-  async getPaymentHistory(page = 1) {
+  async getPaymentHistory(page = 1, rawFilters = {}) {
     requireKasbonBackendKey();
     if (isSupabaseConfigured && !supabase) throw new Error('Koneksi Supabase tidak tersedia.');
+    const filters = paymentHistoryFilters(rawFilters);
     const offset = (page - 1) * 50;
     let payments;
     if (supabase) {
-      const { data, error } = await supabase.from('history_payments')
+      let query = supabase.from('history_payments')
         .select('id,user_name,company,division,payment_date,created_at,whatsapp_message_id,updated_at,updated_by')
-        .is('deleted_at', null)
+        .is('deleted_at', null);
+      if (filters.search) query = query.ilike('user_name', '%' + filters.search.replace(/[\\%_]/g, '\\$&') + '%');
+      if (filters.company) query = query.eq('company', filters.company);
+      if (filters.division) query = query.eq('division', filters.division);
+      if (filters.startDate) query = query.gte('payment_date', filters.startDate);
+      if (filters.endDate) query = query.lte('payment_date', filters.endDate);
+      const { data, error } = await query
         .order('payment_date', { ascending: false }).order('id', { ascending: false })
         .range(offset, offset + 50);
       if (error) throw error;
       payments = data || [];
     } else {
       payments = [...(readLocalStore().history_payments || [])]
-        .filter(payment => !payment.deleted_at)
+        .filter(payment => !payment.deleted_at &&
+          (!filters.search || payment.user_name.toLocaleLowerCase('id-ID').includes(filters.search.toLocaleLowerCase('id-ID'))) &&
+          (!filters.company || payment.company === filters.company) &&
+          (!filters.division || payment.division === filters.division) &&
+          (!filters.startDate || payment.payment_date >= filters.startDate) &&
+          (!filters.endDate || payment.payment_date <= filters.endDate))
         .sort((a, b) => b.payment_date.localeCompare(a.payment_date) || Number(b.id) - Number(a.id))
         .slice(offset, offset + 51);
     }

@@ -258,3 +258,24 @@ database atau worker bot sehat. Detail prosedur ada di README bot.
 
 Lihat [VALIDATION.md](VALIDATION.md) untuk temuan yang sudah diperbaiki, pengujian
 dan risiko yang masih terbuka. Hasil tes bukan jaminan bebas race condition.
+
+
+## Parameter filter riwayat pembayaran
+
+GET /api/admin/history-payments menerima page, search, company, division, date,
+startDate, endDate, month, dan year. Contoh:
+
+```text
+/api/admin/history-payments?page=1&search=Budi&company=PT%20Contoh&division=HR&startDate=2026-10-01&endDate=2026-10-31
+```
+
+search mencari sebagian nama dan memperlakukan karakter wildcard sebagai teks
+literal. company/division memakai pencocokan nilai lengkap. date adalah satu
+tanggal; startDate/endDate rentang inklusif; month/year dapat dipakai sebagai
+alternatif periode bulan, termasuk perhitungan Februari tahun kabisat.
+Tanggal/periode yang tidak valid ditolak HTTP 400. Filter tanggal tunggal, rentang,
+dan bulan tidak boleh dicampur dalam satu permintaan.
+
+Filter diterapkan di Supabase maupun JSON development sebelum pengurutan dan
+pagination. Catatan soft delete tetap dikecualikan. Tanggal acuan adalah
+history_payments.payment_date. Perubahan ini tidak memerlukan migrasi database.
