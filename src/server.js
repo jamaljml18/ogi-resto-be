@@ -7,6 +7,7 @@ const cors = require('cors');
 const db = require('./db');
 const { DAYS_OF_WEEK } = require('./seedData');
 const { periodBounds, employeeKey, summarizeKasbon } = require('./kasbon');
+const { groupOrdersByCustomerDay } = require('./orderGrouping');
 
 const { validateManualPaymentHistory, paymentHistoryId, historyPage } = require('./paymentHistory');
 
@@ -297,7 +298,8 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
         totalTransactions,
         totalRevenue
       },
-      orders
+      orders,
+      groupedOrders: groupOrdersByCustomerDay(orders)
     });
   } catch (err) {
     console.error('Error get orders:', err);
@@ -308,6 +310,10 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
 // Ekspor Riwayat Pesanan ke CSV (Terproteksi & Anti-CSV Injection)
 app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
   try {
+    const grouped = req.query.groupBy === 'customer_day';
+    if (req.query.groupBy !== undefined && !grouped) {
+      return res.status(400).json({ error: 'Mode ringkasan CSV tidak valid.' });
+    }
     const { search, company, division, location, date, day, startDate, endDate, month, year } = req.query;
     const orders = await db.getOrders({ search, company, division, location, date, day, startDate, endDate, month, year });
 
@@ -317,6 +323,9 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
       const uKey = JSON.stringify([employeeKey(ord), ord.order_date]);
       userDailyTotals[uKey] = (userDailyTotals[uKey] || 0) + (Number(ord.total_price) || 0);
     });
+
+    const exportOrders = grouped ? groupOrdersByCustomerDay(orders) : orders;
+    const csvCell = value => '"' + sanitizeForCsv(String(value ?? '')).replace(/"/g, '""') + '"';
 
     // Header CSV
     const headers = [
@@ -335,9 +344,10 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
       'Total Bayar Harian Pemesan (Rp)'
     ];
 
+    if (grouped) headers.push('Jumlah Pesanan', 'Total Cash / Transfer (Rp)', 'Total Kasbon (Rp)');
     const rows = [headers.join(';')];
 
-    orders.forEach((ord, index) => {
+    exportOrders.forEach((ord, index) => {
       const itemsDetail = Array.isArray(ord.items)
         ? ord.items.filter((it) => it && !it._meta).map((it) => `${it.name} (${it.qty}x)`).join(', ')
         : '';
@@ -347,19 +357,20 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
 
       const row = [
         index + 1,
-        `"${sanitizeForCsv(ord.order_number)}"`,
-        `"${sanitizeForCsv(ord.order_date)}"`,
-        `"${sanitizeForCsv(ord.order_day)}"`,
-        `"${sanitizeForCsv(ord.user_name)}"`,
-        `"${sanitizeForCsv(ord.company)}"`,
-        `"${sanitizeForCsv(ord.division)}"`,
-        `"${sanitizeForCsv(ord.location)}"`,
-        `"${sanitizeForCsv(ord.payment_method || 'Cash')}"`,
-        `"${sanitizeForCsv(ord.notes || '-')}"`,
-        `"${sanitizeForCsv(itemsDetail)}"`,
+        csvCell(grouped ? ord.order_numbers.join(' | ') : ord.order_number),
+        csvCell(ord.order_date),
+        csvCell(ord.order_day),
+        csvCell(ord.user_name),
+        csvCell(ord.company),
+        csvCell(ord.division),
+        csvCell(ord.location),
+        csvCell(ord.payment_method || 'Cash'),
+        csvCell(ord.notes || '-'),
+        csvCell(itemsDetail),
         ord.total_price,
         dailyTotal
       ];
+      if (grouped) row.push(ord.order_count, ord.cash_total, ord.kasbon_total);
       rows.push(row.join(';'));
     });
 
@@ -368,7 +379,7 @@ app.get('/api/admin/orders/export-csv', requireAuth, async (req, res) => {
     const dateLabel = (startDate && endDate)
       ? `${startDate}_sd_${endDate}`
       : (date || (year && month ? `${year}_${month}` : (year || new Date().toISOString().split('T')[0])));
-    const filename = `Rekap_Pesanan_Catering_${dateLabel}.csv`;
+    const filename = `Rekap_Pesanan_Catering_${grouped ? 'Ringkas_' : ''}${dateLabel}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).send(csvContent);

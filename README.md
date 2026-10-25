@@ -279,3 +279,22 @@ dan bulan tidak boleh dicampur dalam satu permintaan.
 Filter diterapkan di Supabase maupun JSON development sebelum pengurutan dan
 pagination. Catatan soft delete tetap dikecualikan. Tanggal acuan adalah
 history_payments.payment_date. Perubahan ini tidak memerlukan migrasi database.
+
+
+## Ringkasan pesanan untuk tabel dan CSV
+
+GET /api/admin/orders tetap mengembalikan orders dan summary dari pesanan asli,
+ditambah groupedOrders hasil src/orderGrouping.js. Pengelompokan memakai identitas
+employeeKey (nama, perusahaan, divisi yang dinormalisasi) dan tanggal pengantaran.
+Pengelompokan berlangsung setelah filter; tanggal atau identitas berbeda tidak
+digabung.
+
+GET /api/admin/orders/export-csv?groupBy=customer_day mengekspor ringkasan yang sama.
+Tanpa groupBy, CSV tetap per pesanan seperti sebelumnya. Mode lain ditolak 400.
+CSV ringkas memuat seluruh nomor order, jumlah order, menu yang dijumlahkan,
+lokasi/catatan gabungan, serta nominal Cash/Transfer dan Kasbon terpisah.
+Teks CSV meng-escape tanda kutip, termasuk pada catatan.
+
+Tidak ada perubahan tabel atau migrasi SQL. Pengelompokan dilakukan di memori
+dari hasil query yang tersedia dan tidak menyimpan ulang pesanan. Jumlah transaksi,
+omset, dan rata-rata di dashboard tetap menggunakan pesanan asli.

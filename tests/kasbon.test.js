@@ -125,6 +125,7 @@ function loadServer(mockOrders = orders) {
         getKasbonOrders:async()=>orders,getKasbonPayments:async()=>[],
         setKasbonPayment:async input=>{saves++;return {is_paid:input.isPaid};}
       } : name==='./seedData' ? {DAYS_OF_WEEK:[]} :
+      name==='./orderGrouping' ? require('../src/orderGrouping') :
       name==='./whatsappWebhook' ? require('../src/whatsappWebhook') :
       name==='./paymentHistory' ? require('../src/paymentHistory') :
       name==='./kasbon' ? require('../src/kasbon') : require(name)};
@@ -494,4 +495,109 @@ test('Cloud history filters precede range and escape literal search wildcards', 
   assert.ok(calls.some(call => call[0] === 'lte' && call[2] === '2024-02-29'));
   assert.deepEqual(calls.at(-1), ['range', 50, 100]);
   assert.equal(writes(), 0);
+});
+
+const { groupOrdersByCustomerDay } = require('../src/orderGrouping');
+
+test('Compact orders merge five same-day orders without changing source records or their totals', () => {
+  const input = Array.from({ length: 5 }, (_, index) => ({
+    ...base, user_name: index % 2 ? ' BUDI ' : 'Budi', order_date: '2026-10-24',
+    order_number: 'ORD-' + index, total_price: 3000, payment_method: 'Cash',
+    created_at: '2026-10-24T03:0' + index + ':00Z',
+    items: [{ name: index < 2 ? 'Oseng labu siam' : 'Oseng tahu', qty: 1, price: 3000, subtotal: 3000 }],
+    notes: index === 0 ? 'sayap' : '', location: index === 0 ? 'Gedung A' : 'Gedung B'
+  }));
+  const original = JSON.stringify(input);
+  const [row] = groupOrdersByCustomerDay(input);
+  assert.equal(row.order_count, 5); assert.equal(row.total_price, 15000);
+  assert.equal(row.cash_total, 15000); assert.equal(row.kasbon_total, 0);
+  assert.deepEqual(row.items.map(item => item.qty), [2, 3]);
+  assert.equal(row.order_numbers.length, 5);
+  assert.match(row.location, /Gedung A/); assert.match(row.location, /Gedung B/);
+  assert.match(row.notes, /ORD-0: sayap/);
+  assert.equal(row.created_at, '2026-10-24T03:04:00Z');
+  assert.equal(JSON.stringify(input), original);
+});
+
+test('Compact identity keeps different companies, divisions and delivery dates separate', () => {
+  const order = { ...base, total_price: 3000, items: [] };
+  const rows = groupOrdersByCustomerDay([
+    order, { ...order, user_name: ' BUDI ' }, { ...order, company: 'PT B' },
+    { ...order, division: 'IT' }, { ...order, order_date: '2026-01-16' }
+  ]);
+  assert.equal(rows.length, 4);
+  assert.equal(rows[0].order_count, 2);
+  assert.equal(rows.reduce((sum, row) => sum + row.total_price, 0), 15000);
+});
+
+test('Mixed payments and menu price changes retain distinct amounts and ignore legacy metadata items', () => {
+  const rows = groupOrdersByCustomerDay([
+    { ...base, total_price: 3000, payment_method: 'Cash',
+      items: [{ name: 'Nasi', qty: 1, price: 3000 }] },
+    { ...base, total_price: 5000,
+      items: [{ name: 'Nasi', qty: 1, price: 5000 }, { _meta: true, payment_method: 'Kasbon', notes: 'pedas' }] }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].payment_methods, ['Cash', 'Kasbon']);
+  assert.equal(rows[0].cash_total, 3000); assert.equal(rows[0].kasbon_total, 5000);
+  assert.equal(rows[0].total_price, 8000); assert.equal(rows[0].items.length, 2);
+  assert.match(rows[0].notes, /pedas/);
+});
+
+test('Orders API preserves original statistics and adds grouped rows', async () => {
+  const input = [
+    { ...base, order_number: 'A', total_price: 3000, items: [] },
+    { ...base, order_number: 'B', total_price: 3000, items: [] }
+  ];
+  const { routes } = loadServer(input), res = response();
+  await routes.find(route => route.method === 'get' && route.endpoint === '/api/admin/orders')
+    .handlers[1]({ query: {} }, res);
+  assert.equal(res.code, 200);
+  assert.equal(res.data.orders.length, 2);
+  assert.equal(res.data.summary.totalTransactions, 2);
+  assert.equal(res.data.summary.totalRevenue, 6000);
+  assert.equal(res.data.groupedOrders.length, 1);
+  assert.equal(res.data.groupedOrders[0].total_price, 6000);
+});
+
+function parseCsvLine(line) {
+  const values = []; let text = '', quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') { text += '"'; index++; }
+      else quoted = !quoted;
+    } else if (char === ';' && !quoted) { values.push(text); text = ''; }
+    else text += char;
+  }
+  values.push(text); return values;
+}
+
+test('Grouped CSV exports one row per customer/day, complete references, and separate payment amounts', async () => {
+  const input = [
+    { ...base, order_number: 'ORD-A', total_price: 3000, payment_method: 'Cash',
+      notes: 'sayap; "pedas"', items: [{ name: 'Oseng tahu', price: 3000, qty: 1 }] },
+    { ...base, order_number: 'ORD-B', total_price: 3000, payment_method: 'Kasbon',
+      items: [{ name: 'Oseng tahu', price: 3000, qty: 1 }] },
+    { ...base, user_name: 'Other', order_number: 'ORD-C', total_price: 5000, items: [] }
+  ];
+  const { routes } = loadServer(input), res = response();
+  const route = routes.find(route => route.endpoint === '/api/admin/orders/export-csv');
+  await route.handlers[1]({ query: { groupBy: 'customer_day' } }, res);
+  assert.equal(res.code, 200);
+  const lines = res.data.trim().split('\r\n');
+  assert.equal(lines.length, 3);
+  const header = parseCsvLine(lines[0]), row = parseCsvLine(lines[1]);
+  assert.equal(row.length, header.length);
+  assert.equal(row[1], 'ORD-A | ORD-B');
+  assert.match(row[9], /sayap; "pedas"/);
+  assert.equal(row[10], 'Oseng tahu (2x)');
+  assert.equal(Number(row[11]), 6000);
+  assert.equal(Number(row[13]), 2);
+  assert.equal(Number(row[14]), 3000);
+  assert.equal(Number(row[15]), 3000);
+  assert.match(res.headers['Content-Disposition'], /Ringkas_/);
+  const invalid = response();
+  await route.handlers[1]({ query: { groupBy: 'unsupported' } }, invalid);
+  assert.equal(invalid.code, 400);
 });
